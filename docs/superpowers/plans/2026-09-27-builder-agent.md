@@ -311,7 +311,7 @@ their tests, `distribution/dependencies.json`, `.github/workflows/build.yml`,
 `README.md`, `AGENTS.md`; create `builder-addon/README.md`,
 `docs/builder-runtime-checklist.md`.
 
-- [ ] Write failing Python tests for builder artifact/metadata, cross-addon imports,
+- [x] Write failing Python tests for builder artifact/metadata, cross-addon imports,
   bundled Meteor/Cobblemon rejection and `builder-v0.1.0-alpha.1` tag routing.
 
 ```python
@@ -319,19 +319,25 @@ self.assertEqual(("builder-addon", "0.1.0-alpha.1"),
                  release.parse_tag("builder-v0.1.0-alpha.1"))
 ```
 
-- [ ] Run `python3 -m unittest discover -s distribution -v` red. Extend explicit
+- [x] Run `python3 -m unittest discover -s distribution -v` red. Extend explicit
   addon registries and CI matrix to three independent builds; retain old rejection
   tests, pinned actions and draft-only release workflow. Include source/license
   notices and SHA256 assets. No live auth/model requests in CI.
-- [ ] Document runtime setup, local-vs-cloud disclosure, exact limits, unavailable
+- [x] Document runtime setup, local-vs-cloud disclosure, exact limits, unavailable
   states, privacy controls, native-OS CLI requirement, experimental status and no
   server permissions/world edits. Mark incomplete live checks honestly.
 - [ ] Run all three Gradle builds, distribution tests, builder packaging, diff check,
   workflow lint and private-path/secret scan of changed files. Inspect actual JAR
   contents and metadata. Require independent code review before integration.
-- [ ] Commit `build: package and verify independent KRU Builder addon`. Report tests
+- [x] Commit `build: package and verify independent KRU Builder addon`. Report tests
   separately from manual/runtime evidence. Stop before installing, merging main or
   publishing a release; present the feature branch and remaining live checks.
+
+Task 8 execution note: all three Gradle builds, 19 distribution tests, Builder
+packaging, artifact inspection, YAML parsing/structure checks, diff whitespace
+check and changed-file private-path/token scan passed. `actionlint` is unavailable
+in the environment; no live runtime checks were performed, and the checklist
+below remains unchecked until tested in Minecraft.
 
 ## Self-review and checkpoints
 

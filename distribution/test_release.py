@@ -12,6 +12,7 @@ class ReleaseTest(unittest.TestCase):
     def test_tag_identifies_only_known_addons_and_semver(self):
         self.assertEqual(("cobblemon-addon", "0.3.3"), release.parse_tag("cobblemon-v0.3.3"))
         self.assertEqual(("tools-addon", "1.2.3-rc.1"), release.parse_tag("tools-v1.2.3-rc.1"))
+        self.assertEqual(("builder-addon", "0.1.0-alpha.1"), release.parse_tag("builder-v0.1.0-alpha.1"))
         for tag in ("v1.2.3", "tools-v../x", "tools-v1.2", "tools-v01.2.3", "other-v1.2.3"):
             with self.subTest(tag=tag), self.assertRaises(ValueError):
                 release.parse_tag(tag)
@@ -71,3 +72,24 @@ class ReleaseTest(unittest.TestCase):
                 p.rename(p.with_name(p.name.replace("0.2.0", "0.3.0")))
             with self.assertRaises(ValueError):
                 release.package(root, "tools-addon")
+
+    def test_builder_package_includes_license_notices_and_checksums(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            project = root / "builder-addon"
+            libs = project / "build/libs"
+            libs.mkdir(parents=True)
+            (project / "gradle.properties").write_text("mod_version=0.1.0-alpha.1\n")
+            for name in ("LICENSE", "NOTICE", "THIRD_PARTY.md"):
+                (project / name).write_text(name + " notice\n")
+            with zipfile.ZipFile(libs / "kru-builder-0.1.0-alpha.1.jar", "w") as jar:
+                jar.writestr("fabric.mod.json", json.dumps({"id": "kru-builder", "version": "0.1.0-alpha.1",
+                    "authors": ["KRU"], "depends": {"meteor-client": "0.5.8"},
+                    "entrypoints": {"meteor": ["dev.krul.builder.BuilderAddon"]}}))
+                jar.writestr("dev/krul/builder/BuilderAddon.class", b"class")
+            with zipfile.ZipFile(libs / "kru-builder-0.1.0-alpha.1-sources.jar", "w") as jar:
+                jar.writestr("Example.java", "class Example {}")
+            out = release.package(root, "builder-addon")
+            self.assertTrue({"LICENSE", "NOTICE", "THIRD_PARTY.md", "SHA256SUMS"}.issubset(
+                {path.name for path in out.iterdir()}))
+            self.assertEqual(out, release.check_release(root, "builder-v0.1.0-alpha.1"))

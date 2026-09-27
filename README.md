@@ -11,9 +11,20 @@ Cobblemon builds are not guaranteed to be compatible.
 | --- | --- | --- |
 | KRU Cobblemon | Discovery, Dungeon Discovery, Type Chart, Battle Matchups, UI Utils, PC Organizer | Yes |
 | KRU Tools | Selective Packet Delay with manual send/discard | No |
+| KRU Builder | Experimental client-side build planning and manual hologram | No |
 
 The addons do not depend on one another. Meteor is external and unmodified;
 no Meteor fork or Cobblemon binary is distributed here.
+
+KRU Builder is experimental. It reads a bounded selection and prepares a
+proposal for the player to inspect and accept; it never places/breaks blocks,
+moves the player, or sends server commands. Before confirmation, the UI shows
+the context and images prepared for a request. Confirming sends the text,
+selected-area block data, and visible images to Codex through the configured
+native-OS CLI. Do not include private builds or screenshots you do not want to
+send to the model provider. The CLI uses a separate Builder-owned Codex profile;
+it does not copy the regular Codex login or configuration. See
+[Builder setup and privacy](builder-addon/README.md).
 
 ## Installation
 
@@ -59,13 +70,17 @@ rules. Use them only where permitted.
 ```sh
 (cd cobblemon-addon && bash ./gradlew build)
 (cd tools-addon && bash ./gradlew build)
+(cd builder-addon && bash ./gradlew build)
 python3 -m unittest discover -s distribution -v
 python3 distribution/release.py cobblemon-addon
 python3 distribution/release.py tools-addon
 ```
 
-Both Gradle roots build independently. Packaging validates addon boundaries,
+All three Gradle roots build independently. Packaging validates addon boundaries,
 binary metadata, source archives and checksums.
+
+- [KRU Builder setup, limits and experimental runtime checklist](builder-addon/README.md)
+- [Builder live validation checklist](docs/builder-runtime-checklist.md)
 
 - [Build, optional ABI checks and draft releases](distribution/README.md)
 - [Current status and known limitations](docs/implementation-status.md)

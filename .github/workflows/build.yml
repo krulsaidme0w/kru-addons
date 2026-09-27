@@ -4,7 +4,7 @@ on:
   pull_request:
   push:
     branches: ['**']
-    tags: ['cobblemon-v*', 'tools-v*']
+    tags: ['cobblemon-v*', 'tools-v*', 'builder-v*']
   workflow_dispatch:
 
 permissions:
@@ -21,7 +21,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        addon: [cobblemon-addon, tools-addon]
+        addon: [cobblemon-addon, tools-addon, builder-addon]
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:

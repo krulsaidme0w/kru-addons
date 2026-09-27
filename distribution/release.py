@@ -10,17 +10,18 @@ import re
 import shutil
 import zipfile
 
-from verify_artifacts import validate
+from verify_artifacts import ADDONS as ARTIFACT_ADDONS, validate, validate_sources
 
-ADDONS = {"cobblemon-addon": "kru-cobblemon", "tools-addon": "kru-tools"}
+ADDONS = {addon: details["id"] for addon, details in ARTIFACT_ADDONS.items()}
+TAG_PREFIXES = {"cobblemon": "cobblemon-addon", "tools": "tools-addon", "builder": "builder-addon"}
 VERSION = r"(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)(?:-[A-Za-z0-9]+(?:[.-][A-Za-z0-9]+)*)?"
 
 
 def parse_tag(tag):
-    match = re.fullmatch(r"(cobblemon|tools)-v(" + VERSION + r")", tag)
+    match = re.fullmatch(r"(cobblemon|tools|builder)-v(" + VERSION + r")", tag)
     if not match:
-        raise ValueError("Expected cobblemon-vX.Y.Z or tools-vX.Y.Z (optional prerelease suffix)")
-    return match[1] + "-addon", match[2]
+        raise ValueError("Expected cobblemon-vX.Y.Z, tools-vX.Y.Z or builder-vX.Y.Z (optional prerelease suffix)")
+    return TAG_PREFIXES[match[1]], match[2]
 
 
 def version(root, addon):
@@ -36,6 +37,10 @@ def version(root, addon):
 def asset_names(addon, value):
     base = f"{ADDONS[addon]}-{value}"
     return [base + ".jar", base + "-sources.jar"]
+
+
+def notice_names(addon):
+    return ["LICENSE", "NOTICE", "THIRD_PARTY.md"] if addon == "builder-addon" else []
 
 
 def checksums(folder, names):
@@ -59,6 +64,11 @@ def verify_assets(folder, addon, value):
         meta = json.loads(jar.read("fabric.mod.json"))
     if meta["id"] != ADDONS[addon] or meta.get("version") != value:
         raise ValueError("Binary addon/version does not match release")
+    source_root = folder.parent.parent / "src/main/java" if folder.name == "libs" else None
+    if source_root is not None:
+        source_errors = validate_sources(source_root, addon)
+        if source_errors:
+            raise ValueError("; ".join(source_errors))
     return names
 
 
@@ -66,13 +76,19 @@ def package(root, addon):
     value = version(root, addon)
     source = root / addon / "build/libs"
     names = verify_assets(source, addon, value)
+    notices = notice_names(addon)
+    for name in notices:
+        if not (root / addon / name).is_file():
+            raise ValueError(f"Missing required notice: {name}")
     dest = root / "dist" / addon
     dest.mkdir(parents=True, exist_ok=True)
-    if any(p.name not in names + ["SHA256SUMS"] for p in dest.iterdir()):
+    if any(p.name not in names + notices + ["SHA256SUMS"] for p in dest.iterdir()):
         raise ValueError("Output contains stale assets; use a fresh dist directory")
     for name in names:
         shutil.copyfile(source / name, dest / name)
-    (dest / "SHA256SUMS").write_text(checksums(dest, names))
+    for name in notices:
+        shutil.copyfile(root / addon / name, dest / name)
+    (dest / "SHA256SUMS").write_text(checksums(dest, names + notices))
     return dest
 
 
@@ -82,9 +98,13 @@ def check_release(root, tag):
         raise ValueError("Tag version differs from gradle.properties")
     dest = root / "dist" / addon
     names = verify_assets(dest, addon, tagged_version)
-    if {p.name for p in dest.iterdir()} != set(names + ["SHA256SUMS"]):
+    source_errors = validate_sources(root / addon / "src/main/java", addon)
+    if source_errors:
+        raise ValueError("; ".join(source_errors))
+    notices = notice_names(addon)
+    if {p.name for p in dest.iterdir()} != set(names + notices + ["SHA256SUMS"]):
         raise ValueError("Unexpected release assets")
-    if (dest / "SHA256SUMS").read_text() != checksums(dest, names):
+    if (dest / "SHA256SUMS").read_text() != checksums(dest, names + notices):
         raise ValueError("Release checksums do not match")
     return dest
 

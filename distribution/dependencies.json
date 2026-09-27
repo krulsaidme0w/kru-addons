@@ -10,7 +10,12 @@
   "addon_template": {
     "repository": "https://github.com/MeteorDevelopment/meteor-addon-template",
     "reference_commit": "7977a462191e5dc14075e076fe2c23e192e34e82",
-    "note": "Adapted addon entrypoint/build contract for two independent 1.21.1 Gradle roots; no template example features."
+    "note": "Adapted addon entrypoint/build contract for three independent 1.21.1 Gradle roots; no template example features."
+  },
+  "addons": {
+    "cobblemon-addon": {"id": "kru-cobblemon", "gradle_root": "cobblemon-addon", "artifact": "kru-cobblemon", "requires_cobblemon": true},
+    "tools-addon": {"id": "kru-tools", "gradle_root": "tools-addon", "artifact": "kru-tools", "requires_cobblemon": false},
+    "builder-addon": {"id": "kru-builder", "gradle_root": "builder-addon", "artifact": "kru-builder", "requires_cobblemon": false, "tag_prefix": "builder"}
   },
   "cobblemon": {"required_by": "kru-cobblemon", "note": "Runtime ABI must be tested for the intended Cobblemon build; no Academy dependency."}
 }
