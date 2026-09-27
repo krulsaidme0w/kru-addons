@@ -137,6 +137,7 @@ public final class BuilderController implements AutoCloseable {
     }
 
     private boolean activeTurn;
+    private long turnAcceptedRevision = -1;
 
     /** Explicit privacy confirmation. Uses exactly the reviewed context and current visible attachment set. */
     public void confirmSend() {
@@ -178,7 +179,8 @@ public final class BuilderController implements AutoCloseable {
         requestLease = attachments.retainForRequest();
         turnFinished = new CompletableFuture<>();
         long run = ++generation;
-        activeTurn = true; prepared = null; preparedSnapshot = null; phase = BuilderUiState.Phase.WAITING;
+        activeTurn = true; turnAcceptedRevision = accepted.map(BuildPlan::revision).orElse(-1L);
+        prepared = null; preparedSnapshot = null; phase = BuilderUiState.Phase.WAITING;
         status = "Sending reviewed request to Codex";
         conversation.add(new BuilderUiState.Message("you", request.text()));
         try {
@@ -198,6 +200,10 @@ public final class BuilderController implements AutoCloseable {
 
     private void onAgentEvent(long run, AgentEvent event) {
         if (!current(run)) return;
+        if (activeTurn && acceptedRevision() != turnAcceptedRevision) {
+            invalidateTurn("Accepted plan changed while Codex was responding; response discarded");
+            return;
+        }
         if (event instanceof AgentEvent.Status statusEvent) {
             authorizationUrl = statusEvent.authorizationUrl(); userCode = statusEvent.userCode();
             status = statusEvent.message();
@@ -249,18 +255,20 @@ public final class BuilderController implements AutoCloseable {
             List<String> errors = session == null ? List.of("No active project session") : session.accept(revision, fresh);
             if (!errors.isEmpty()) { status = String.join("; ", errors); return; }
             snapshot = Optional.of(fresh);
+            invalidateTurn("Accepted plan changed; previous provider response discarded");
+            long saveRun = generation;
             BuildPlan accepted = session.accepted().orElseThrow();
             CompletableFuture.runAsync(() -> {
                 try {
                     ProjectStore.SaveResult result = store.save(accepted);
                     clientExecutor.execute(() -> {
-                        if (closed || run != generation) return;
+                        if (closed || saveRun != generation) return;
                         nonAtomicSave = result.nonAtomicFallback();
                         cleanupWarnings = result.cleanupWarnings().stream().map(IOException::getMessage).toList();
                         status = cleanupWarnings.isEmpty() ? "Accepted plan saved" : "Plan saved with cleanup warnings";
                     });
                 } catch (IOException e) {
-                    clientExecutor.execute(() -> { if (!closed && run == generation) status = "Plan accepted in this session; save failed: " + safeMessage(e); });
+                    clientExecutor.execute(() -> { if (!closed && saveRun == generation) status = "Plan accepted in this session; save failed: " + safeMessage(e); });
                 }
             }, ioExecutor);
         }));
@@ -275,15 +283,20 @@ public final class BuilderController implements AutoCloseable {
         status = "Draft rejected; accepted plan kept";
     }
 
-    public void worldChanged(UUID newWorld) {
+    public void selectionChanged() { invalidateContext(false, "Selection changed; refresh context and screenshot"); }
+    public void worldChanged() { invalidateContext(true, "World changed; select and scan this world to continue"); }
+
+    private void invalidateContext(boolean resetWorld, String reason) {
         if (closed) return;
-        ++generation; world = Objects.requireNonNull(newWorld); snapshot = Optional.empty(); prepared = null; preparedSnapshot = null;
-        conversation.clear(); thumbnails.clear();
+        ++generation;
+        if (resetWorld) { world = null; conversation.clear(); }
+        snapshot = Optional.empty(); prepared = null; preparedSnapshot = null; thumbnails.clear();
         attachments.draft().forEach(attachment -> { removedAttachments.add(attachment.id()); ioExecutor.execute(() -> attachments.remove(attachment.id())); });
         if (pendingCapture != null) pendingCapture.cancel(true);
         pendingCapture = null;
         if (activeTurn) { AgentClient cancelAgent = agent; ioExecutor.execute(cancelAgent::cancel); activeTurn = false; turnFinished.complete(null); }
-        phase = BuilderUiState.Phase.DISCONNECTED; status = "World changed; select and scan this world to continue";
+        ProjectSession session = sessions.get(); if (session != null) session.cancelRequest();
+        phase = BuilderUiState.Phase.DISCONNECTED; status = reason;
     }
 
     public void observeSnapshot(WorldSnapshot current) {
@@ -392,6 +405,17 @@ public final class BuilderController implements AutoCloseable {
     }
     private List<AttachmentPolicy.Attachment> visibleAttachments() {
         return attachments.draft().stream().filter(a -> !removedAttachments.contains(a.id())).toList();
+    }
+    private long acceptedRevision() {
+        ProjectSession session = sessions.get();
+        return session == null ? -1L : session.accepted().map(BuildPlan::revision).orElse(-1L);
+    }
+    private void invalidateTurn(String message) {
+        ++generation;
+        if (activeTurn) { AgentClient staleAgent = agent; ioExecutor.execute(staleAgent::cancel); activeTurn = false; turnFinished.complete(null); }
+        phase = agent.status().connection() == AgentClient.Connection.READY
+            && agent.status().login() == AgentClient.Login.AUTHENTICATED ? BuilderUiState.Phase.READY : BuilderUiState.Phase.DISCONNECTED;
+        status = message;
     }
     private static boolean sameWorldContent(WorldSnapshot first, WorldSnapshot second) {
         return first.session().equals(second.session()) && first.bounds().equals(second.bounds())

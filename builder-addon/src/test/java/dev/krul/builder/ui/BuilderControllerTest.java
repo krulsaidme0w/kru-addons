@@ -1,6 +1,7 @@
 package dev.krul.builder.ui;
 
 import dev.krul.builder.agent.*;
+import dev.krul.builder.context.ScanSession;
 import dev.krul.builder.model.*;
 import dev.krul.builder.project.*;
 import dev.krul.builder.visual.AttachmentPolicy;
@@ -12,6 +13,7 @@ import java.awt.image.BufferedImage;
 import java.nio.file.Path;
 import java.util.*;
 import java.util.concurrent.*;
+import java.util.function.Supplier;
 import java.util.function.Consumer;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -74,6 +76,61 @@ class BuilderControllerTest {
         fixture.close();
     }
 
+    @Test void realScanSessionResetCanPrepareAndConfirmUsingItsActualSessionIdentity() throws Exception {
+        var fixture = new Fixture();
+        var scans = new ScanSession();
+        Object world = new Object(), connection = new Object(), player = new Object();
+        scans.bind(world, connection, player);
+        scans.setFirst(new Cell(4, 70, 9)); scans.setSecond(new Cell(4, 70, 9));
+        scans.requestScan(ignored -> Optional.of(AIR)); scans.tick();
+        fixture.controller.observeSnapshot(scans.snapshot().orElseThrow());
+
+        fixture.controller.worldChanged();
+        scans.reset(); scans.bind(world, connection, player);
+        scans.setFirst(new Cell(6, 70, 9)); scans.setSecond(new Cell(6, 70, 9));
+        scans.requestScan(ignored -> Optional.of(AIR)); scans.tick();
+        WorldSnapshot selected = scans.snapshot().orElseThrow();
+        fixture.session = new ProjectSession(PROJECT, selected, ignored -> true);
+        fixture.snapshotSource = () -> {
+            scans.requestScan(ignored -> Optional.of(AIR)); scans.tick();
+            return CompletableFuture.completedFuture(scans.snapshot().orElseThrow());
+        };
+
+        fixture.controller.send("Build on this selection");
+        fixture.capture.complete(fixture.capturePath());
+        fixture.controller.confirmSend();
+
+        assertEquals(1, fixture.agent.starts);
+        assertEquals(selected.session(), fixture.agent.request.session());
+        fixture.close();
+    }
+
+    @Test void oldTurnEventsCannotChangeControllerStateAfterPlanAcceptance() throws Exception {
+        var fixture = new Fixture();
+        fixture.scans.add(fixture.snapshot(12));
+        fixture.scans.add(fixture.snapshot(13));
+        fixture.scans.add(fixture.snapshot(14));
+        fixture.controller.send("Build this"); fixture.capture.complete(fixture.capturePath());
+        fixture.controller.confirmSend();
+        fixture.agent.deliver(new AgentEvent.Proposal(fixture.proposal(1, 13)));
+        fixture.controller.accept(1);
+        BuilderUiState accepted = fixture.controller.state();
+        assertEquals(fixture.proposal(1, 13), accepted.accepted().orElseThrow());
+        assertTrue(accepted.draft().isEmpty());
+
+        fixture.agent.deliver(new AgentEvent.Status(AgentClient.Connection.READY, AgentClient.Login.AUTHENTICATED,
+            "late status", null, null));
+        fixture.agent.deliver(new AgentEvent.Proposal(fixture.proposal(2, 13)));
+        fixture.agent.deliver(new AgentEvent.Completed("late completion"));
+
+        BuilderUiState afterLateEvents = fixture.controller.state();
+        assertEquals(accepted.phase(), afterLateEvents.phase());
+        assertEquals(accepted.status(), afterLateEvents.status());
+        assertEquals(accepted.accepted(), afterLateEvents.accepted());
+        assertEquals(accepted.draft(), afterLateEvents.draft());
+        fixture.close();
+    }
+
     @Test void doubleSendDoesNotStartOverlappingProviderTurns() {
         var fixture = new Fixture();
         fixture.controller.send("one");
@@ -100,7 +157,7 @@ class BuilderControllerTest {
         var fixture = new Fixture();
         fixture.controller.send("one"); fixture.capture.complete(fixture.capturePath());
         fixture.controller.confirmSend();
-        fixture.controller.worldChanged(UUID.randomUUID());
+        fixture.controller.worldChanged();
         fixture.agent.deliver(new AgentEvent.Proposal(fixture.proposal()));
         assertTrue(fixture.controller.state().draft().isEmpty());
         assertTrue(fixture.controller.state().snapshot().isEmpty());
@@ -122,8 +179,9 @@ class BuilderControllerTest {
         final UUID world = UUID.randomUUID();
         final Bounds bounds = new Bounds(new Cell(0, 0, 0), new Cell(0, 0, 0));
         final WorldSnapshot latest = snapshot(12);
-        final ProjectSession session = new ProjectSession(PROJECT, snapshot(10), ignored -> true);
+        ProjectSession session = new ProjectSession(PROJECT, snapshot(10), ignored -> true);
         final Deque<WorldSnapshot> scans = new ArrayDeque<>();
+        Supplier<CompletableFuture<WorldSnapshot>> snapshotSource = this::fresh;
         final BuildPlan accepted = proposal();
         final FakeAgent agent = new FakeAgent();
         final CompletableFuture<Path> capture = new CompletableFuture<>();
@@ -132,7 +190,7 @@ class BuilderControllerTest {
         Fixture() {
             try { attachments = new AttachmentPolicy(temp.resolve(UUID.randomUUID().toString())); }
             catch (Exception e) { throw new RuntimeException(e); }
-            controller = new BuilderController(PROJECT, "codex", this::fresh, () -> session, agent,
+            controller = new BuilderController(PROJECT, "codex", () -> snapshotSource.get(), () -> session, agent,
                 () -> capture, attachments, new ProjectStore(temp.resolve("projects")), Runnable::run,
                 Runnable::run, ignored -> {});
         }

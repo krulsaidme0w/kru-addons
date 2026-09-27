@@ -94,7 +94,7 @@ public final class BuilderModule extends Module {
             boolean changed = boundWorld != null || boundConnection != null || boundPlayer != null;
             boundWorld = world; boundConnection = connection; boundPlayer = player;
             scans.bind(world, connection, player);
-            if (changed) invalidateSession("World session changed");
+            if (changed) invalidateWorldSession("World session changed");
         } else scans.bind(world, connection, player);
     }
 
@@ -205,15 +205,24 @@ public final class BuilderModule extends Module {
         freshScanActive = false; freshAfterCurrent = false;
     }
 
-    private void invalidateSession(String reason) {
-        if (controller != null) controller.worldChanged(UUID.randomUUID());
+    private void invalidateWorldSession(String reason) {
+        if (controller != null) controller.worldChanged();
+        invalidateSelectionState(reason);
+    }
+
+    private void invalidateSelection(String reason) {
+        if (controller != null) controller.selectionChanged();
+        invalidateSelectionState(reason);
+    }
+
+    private void invalidateSelectionState(String reason) {
         projectSession = null;
         renderedPlan = null; renderedSelection = null; blueprintRenderer = null;
         failFreshWaiters(new CancellationException(reason));
     }
 
     @EventHandler private void onJoined(GameJoinedEvent event) { syncContext(); }
-    @EventHandler private void onLeft(GameLeftEvent event) { invalidateSession("World disconnected"); scans.reset(); boundWorld = boundConnection = boundPlayer = null; }
+    @EventHandler private void onLeft(GameLeftEvent event) { invalidateWorldSession("World disconnected"); scans.reset(); boundWorld = boundConnection = boundPlayer = null; }
 
     private void mark(boolean first) {
         if (!isActive()) { warning("Enable Builder before marking a selection."); return; }
@@ -226,13 +235,13 @@ public final class BuilderModule extends Module {
         var pos = block.getBlockPos();
         var cell = new Cell(pos.getX(), pos.getY(), pos.getZ());
         if (first) scans.setFirst(cell); else scans.setSecond(cell);
-        invalidateSession("Selection changed");
+        invalidateSelection("Selection changed");
         info("%s corner: %d, %d, %d", first ? "First" : "Second", cell.x(), cell.y(), cell.z());
         requestScan();
     }
 
     private void clearSelection() {
-        syncContext(); scans.clearSelection(); invalidateSession("Selection cleared"); report();
+        syncContext(); scans.clearSelection(); invalidateSelection("Selection cleared"); report();
     }
     private void requestScan() {
         if (!isActive()) { warning("Enable Builder before scanning."); return; }
