@@ -18,6 +18,8 @@ dependencies {
     modImplementation "meteordevelopment:meteor-client:${project.meteor_version}"
     testImplementation platform('org.junit:junit-bom:5.10.2')
     testImplementation 'org.junit.jupiter:junit-jupiter'
+    // Bootstraps remapped Minecraft classes with Fabric's development access fixes.
+    testImplementation "net.fabricmc:fabric-loader-junit:${project.loader_version}"
     testImplementation 'org.ow2.asm:asm:9.6'
 }
 
