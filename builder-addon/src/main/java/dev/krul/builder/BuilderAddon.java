@@ -1,12 +1,13 @@
 package dev.krul.builder;
 
+import dev.krul.builder.minecraft.BuilderModule;
 import meteordevelopment.meteorclient.addons.MeteorAddon;
 import meteordevelopment.meteorclient.systems.modules.Modules;
 
 public final class BuilderAddon extends MeteorAddon {
     @Override
     public void onInitialize() {
-        // Task 1 provides the model and category only; no building module yet.
+        Modules.get().add(new BuilderModule());
     }
 
     @Override

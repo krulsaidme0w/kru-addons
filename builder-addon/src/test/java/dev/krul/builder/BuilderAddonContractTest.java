@@ -65,7 +65,7 @@ class BuilderAddonContractTest {
     }
 
     @Test
-    void packagedEntrypointUsesMeteorCategoryCallbackAndInitializesNoModule() throws Exception {
+    void packagedEntrypointUsesMeteorCategoryCallbackAndRegistersBuilderModule() throws Exception {
         try (var jar = archive()) {
             var entry = jar.getJarEntry("dev/krul/builder/BuilderAddon.class");
             assertNotNull(entry, "Meteor entrypoint class must ship");
@@ -111,7 +111,11 @@ class BuilderAddonContractTest {
                     + "(Lmeteordevelopment/meteorclient/systems/modules/Category;)V"), registrations);
                 assertEquals(List.of("dev/krul/builder/BuilderCategory.BUILDER:"
                     + "Lmeteordevelopment/meteorclient/systems/modules/Category;"), categoryReads);
-                assertTrue(initializations.isEmpty(), "Task 1 must not install a functional module");
+                assertEquals(List.of(
+                    "meteordevelopment/meteorclient/systems/modules/Modules.get()Lmeteordevelopment/meteorclient/systems/modules/Modules;",
+                    "dev/krul/builder/minecraft/BuilderModule.<init>()V",
+                    "meteordevelopment/meteorclient/systems/modules/Modules.add(Lmeteordevelopment/meteorclient/systems/modules/Module;)V"
+                ), initializations);
                 assertEquals(List.of("dev.krul.builder"), packageNames);
             }
         }
