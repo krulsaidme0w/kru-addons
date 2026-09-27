@@ -39,7 +39,9 @@ public final class BuilderController implements AutoCloseable {
     private AttachmentPolicy.RequestLease requestLease;
     private long generation;
     private UUID world;
+    private UUID automaticScreenshot;
     private boolean closed, collapsed, settingsExpanded, nonAtomicSave;
+    private volatile boolean cloudConsent;
     private String selectedStage;
     private Integer selectedLayer;
     private List<String> cleanupWarnings = List.of();
@@ -75,13 +77,14 @@ public final class BuilderController implements AutoCloseable {
             visibleAttachments(), thumbnails, preparedView, draft, accepted, progress, collapsed, settingsExpanded,
             selectedStage, selectedLayer,
             executable,
-            authorizationUrl, userCode, nonAtomicSave, cleanupWarnings);
+            authorizationUrl, userCode, nonAtomicSave, cleanupWarnings, cloudConsent);
         return current;
     }
 
     /** Prepare local context and capture; sending only occurs after confirmSend(). */
     public void send(String text) {
         ensureOpen();
+        if (!cloudConsent) { status = "Review the cloud data notice and grant session consent before connecting or sending"; return; }
         if (phase == BuilderUiState.Phase.PREPARING || phase == BuilderUiState.Phase.WAITING
                 || prepared != null || phase == BuilderUiState.Phase.READY && activeTurn) return;
         String message = Objects.requireNonNull(text).strip();
@@ -92,6 +95,7 @@ public final class BuilderController implements AutoCloseable {
         }
         ProjectSession session = sessions.get();
         if (session == null) { status = "Select an area and complete a fresh scan first"; return; }
+        removeAutomaticScreenshot();
         prepared = null;
         long run = ++generation;
         phase = BuilderUiState.Phase.PREPARING;
@@ -120,7 +124,8 @@ public final class BuilderController implements AutoCloseable {
                                         return;
                                     }
                                     if (addFailure != null) { phase = BuilderUiState.Phase.FAILED; status = safeMessage(addFailure); return; }
-                            prepared = new BuilderUiState.Prepared(message, context.revision(), context.session(), visibleAttachments());
+                                    automaticScreenshot = attachment.id();
+                                    prepared = new BuilderUiState.Prepared(message, context.revision(), context.session(), visibleAttachments());
                                     preparedSnapshot = context;
                                     phase = BuilderUiState.Phase.READY;
                                     status = "Review the screenshot and attachments, then confirm to send to Codex";
@@ -142,6 +147,7 @@ public final class BuilderController implements AutoCloseable {
     /** Explicit privacy confirmation. Uses exactly the reviewed context and current visible attachment set. */
     public void confirmSend() {
         ensureOpen();
+        if (!cloudConsent) { status = "Cloud consent is required before sending"; return; }
         if (prepared == null || activeTurn) return;
         if (visibleAttachments().stream().anyMatch(a -> !thumbnails.containsKey(a.id()))) {
             status = "Preparing the screenshot preview locally"; return;
@@ -152,7 +158,7 @@ public final class BuilderController implements AutoCloseable {
         phase = BuilderUiState.Phase.PREPARING;
         status = "Rechecking the reviewed snapshot before transmission";
         snapshots.fresh().whenComplete((now, failure) -> clientExecutor.execute(() -> {
-            if (!current(check)) return;
+            if (!current(check) || !cloudConsent) return;
             if (failure != null || now == null) { phase = BuilderUiState.Phase.FAILED; status = "Could not verify the reviewed snapshot"; return; }
             if (reviewedSnapshot == null || !sameWorldContent(reviewedSnapshot, now)) {
                 prepared = null; preparedSnapshot = null; phase = BuilderUiState.Phase.FAILED;
@@ -171,6 +177,7 @@ public final class BuilderController implements AutoCloseable {
     }
 
     private void transmit(BuilderUiState.Prepared review, WorldSnapshot now) {
+        if (!cloudConsent) { phase = BuilderUiState.Phase.CANCELLED; status = "Cloud consent revoked; request was not sent"; return; }
         ProjectSession session = sessions.get();
         Optional<BuildPlan> accepted = session == null ? Optional.empty() : session.accepted();
         List<Path> paths = visibleAttachments().stream().map(AttachmentPolicy.Attachment::path).toList();
@@ -307,12 +314,39 @@ public final class BuilderController implements AutoCloseable {
 
     public void login() {
         if (closed) return;
+        if (!cloudConsent) { status = "Grant session consent before connecting to Codex"; return; }
         long run = ++generation; phase = BuilderUiState.Phase.WAITING; status = "Opening official Codex sign-in";
         AgentClient loginAgent = agent;
-        ioExecutor.execute(() -> loginAgent.login(event -> clientExecutor.execute(() -> onAgentEvent(run, event))));
+        ioExecutor.execute(() -> {
+            if (closed || !cloudConsent || run != generation) return;
+            loginAgent.login(event -> clientExecutor.execute(() -> {
+                if (cloudConsent) onAgentEvent(run, event);
+            }));
+        });
     }
 
     public void reconnect() { if (!closed) login(); }
+    public void setCloudConsent(boolean consent) {
+        if (closed || cloudConsent == consent) return;
+        cloudConsent = consent;
+        if (!consent) {
+            ++generation;
+            if (phase == BuilderUiState.Phase.WAITING && !activeTurn) {
+                AgentClient pendingAgent = agent;
+                ioExecutor.execute(pendingAgent::cancel);
+            }
+            if (activeTurn) {
+                AgentClient cancelAgent = agent;
+                ioExecutor.execute(cancelAgent::cancel);
+                activeTurn = false;
+                turnFinished.complete(null);
+            }
+            phase = agent.status().connection() == AgentClient.Connection.READY
+                && agent.status().login() == AgentClient.Login.AUTHENTICATED
+                ? BuilderUiState.Phase.READY : BuilderUiState.Phase.DISCONNECTED;
+            status = "Cloud consent revoked; pending transmission cancelled";
+        } else status = "Session consent granted; connect or prepare when ready";
+    }
     public void replaceAgent(AgentClient replacement) {
         ensureOpen();
         ++generation;
@@ -325,9 +359,38 @@ public final class BuilderController implements AutoCloseable {
     }
     public void removeAttachment(UUID id) {
         if (closed) return;
+        if (Objects.equals(automaticScreenshot, id)) automaticScreenshot = null;
         removedAttachments.add(id); thumbnails.remove(id);
         if (prepared != null) prepared = new BuilderUiState.Prepared(prepared.text(), prepared.contextRevision(), prepared.session(), visibleAttachments());
         ioExecutor.execute(() -> attachments.remove(id));
+    }
+    /** Imports one explicitly chosen PNG as an addon-owned copy; the original is read-only input. */
+    public void addReference(Path source) {
+        ensureOpen();
+        if (prepared != null || activeTurn || phase == BuilderUiState.Phase.PREPARING || phase == BuilderUiState.Phase.WAITING) {
+            status = "Add reference images before preparing or while no request is active"; return;
+        }
+        Objects.requireNonNull(source, "source");
+        long run = generation;
+        try {
+            CompletableFuture.supplyAsync(() -> attachments.add(source), ioExecutor).whenComplete((attachment, failure) ->
+                clientExecutor.execute(() -> {
+                    if (!current(run) || prepared != null || activeTurn
+                            || phase == BuilderUiState.Phase.PREPARING || phase == BuilderUiState.Phase.WAITING) {
+                        if (attachment != null) ioExecutor.execute(() -> attachments.remove(attachment.id()));
+                        return;
+                    }
+                    if (failure != null) { status = "Reference image rejected: " + safeMessage(failure); return; }
+                    status = "Reference image copied locally; it will be sent only after review and confirmation";
+                    decodeThumbnail(attachment, run, false);
+                }));
+        } catch (RuntimeException failure) { status = "Reference image rejected: " + safeMessage(failure); }
+    }
+    private void removeAutomaticScreenshot() {
+        if (automaticScreenshot == null) return;
+        UUID previous = automaticScreenshot;
+        automaticScreenshot = null;
+        removeAttachment(previous);
     }
     public void toggleCollapsed() { collapsed = !collapsed; }
     public void toggleSettings() { settingsExpanded = !settingsExpanded; }
@@ -375,6 +438,9 @@ public final class BuilderController implements AutoCloseable {
         } else { phase = BuilderUiState.Phase.DISCONNECTED; status = connection.detail(); }
     }
     private void decodeThumbnail(AttachmentPolicy.Attachment attachment, long run) {
+        decodeThumbnail(attachment, run, true);
+    }
+    private void decodeThumbnail(AttachmentPolicy.Attachment attachment, long run, boolean requireCurrentRun) {
         CompletableFuture.runAsync(() -> {
             try {
                 BufferedImage source = ImageIO.read(attachment.path().toFile());
@@ -392,7 +458,11 @@ public final class BuilderController implements AutoCloseable {
                     rgba[i++] = (byte) argb; rgba[i++] = (byte) (argb >>> 24);
                 }
                 var thumbnail = new BuilderUiState.Thumbnail(width, height, rgba);
-                clientExecutor.execute(() -> { if (current(run) && !removedAttachments.contains(attachment.id())) thumbnails.put(attachment.id(), thumbnail); });
+                clientExecutor.execute(() -> {
+                    boolean stillVisible = !closed && !removedAttachments.contains(attachment.id())
+                        && attachments.draft().stream().anyMatch(item -> item.id().equals(attachment.id()));
+                    if (stillVisible && (!requireCurrentRun || current(run))) thumbnails.put(attachment.id(), thumbnail);
+                });
             } catch (IOException failure) {
                 clientExecutor.execute(() -> {
                     if (current(run) && !removedAttachments.contains(attachment.id())) {

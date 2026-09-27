@@ -2,6 +2,7 @@ package dev.krul.builder.minecraft;
 
 import java.nio.file.Path;
 import java.util.concurrent.CompletableFuture;
+import java.util.function.Consumer;
 
 /** Small lifecycle boundary kept independent of Minecraft for capture error handling. */
 final class CaptureLifecycle {
@@ -23,6 +24,12 @@ final class CaptureLifecycle {
         return pending;
     }
     static boolean suppressPreview() { return suppressPreview; }
+
+    static boolean completeOwned(CompletableFuture<Path> request, Path path, Consumer<Path> release) {
+        if (request.complete(path)) return true;
+        release.accept(path);
+        return false;
+    }
 
     static void failWrongThread(CompletableFuture<Path> request) {
         request.completeExceptionally(new IllegalStateException("Capture event was not on client thread"));

@@ -23,7 +23,8 @@ public record BuilderUiState(Phase phase, AgentClient.Status connection, String 
                              String selectedStage, Integer selectedLayer,
                              String executable,
                              URI authorizationUrl, String userCode,
-                             boolean nonAtomicSave, List<String> cleanupWarnings) {
+                             boolean nonAtomicSave, List<String> cleanupWarnings,
+                             boolean cloudConsent) {
     public enum Phase { DISCONNECTED, READY, PREPARING, WAITING, FAILED, CANCELLED }
     public record Message(String role, String text) {}
     public record Prepared(String text, long contextRevision, UUID session,

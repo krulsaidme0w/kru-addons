@@ -11,7 +11,6 @@ import net.minecraft.block.BlockState;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.render.*;
 import net.minecraft.client.render.model.BakedQuad;
-import net.minecraft.client.texture.SpriteAtlasTexture;
 import net.minecraft.registry.Registries;
 import net.minecraft.state.property.Property;
 import net.minecraft.util.Identifier;
@@ -116,7 +115,7 @@ public final class BlueprintRenderer {
             RenderSystem.enableBlend(); RenderSystem.defaultBlendFunc(); RenderSystem.depthMask(false);
             if (throughWalls) RenderSystem.disableDepthTest(); else RenderSystem.enableDepthTest();
             RenderSystem.disableCull(); RenderSystem.setShader(GameRenderer::getPositionTexColorProgram);
-            RenderSystem.setShaderTexture(0, SpriteAtlasTexture.BLOCK_ATLAS_TEXTURE);
+            RenderSystem.setShaderTexture(0, Identifier.ofVanilla("textures/atlas/blocks.png"));
             BufferRenderer.drawWithGlobalProgram(built);
         } finally {
             RenderSystem.depthMask(depthMask);

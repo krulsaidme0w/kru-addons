@@ -335,9 +335,10 @@ self.assertEqual(("builder-addon", "0.1.0-alpha.1"),
 
 Task 8 execution note: all three Gradle builds, 19 distribution tests, Builder
 packaging, artifact inspection, YAML parsing/structure checks, diff whitespace
-check and changed-file private-path/token scan passed. `actionlint` is unavailable
-in the environment; no live runtime checks were performed, and the checklist
-below remains unchecked until tested in Minecraft.
+check, changed-file private-path/token scan, and actionlint 1.7.7 passed. The
+controller verified the official archive SHA256 before running actionlint. No
+live runtime checks were performed, and the checklist below remains unchecked
+until tested in Minecraft.
 
 ## Self-review and checkpoints
 

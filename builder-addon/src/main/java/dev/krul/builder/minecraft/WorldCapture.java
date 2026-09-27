@@ -61,7 +61,7 @@ public final class WorldCapture {
                 int red = data.get(p++) & 255, green = data.get(p++) & 255, blue = data.get(p++) & 255; p++;
                 image.setRGB(x, y, (red << 16) | (green << 8) | blue);
             }
-            request.complete(policy.storeCapture(image));
+            CaptureLifecycle.completeOwned(request, policy.storeCapture(image), policy::releaseCapture);
         } catch (Throwable failure) { request.completeExceptionally(failure); }
         finally { finish(request); }
     }

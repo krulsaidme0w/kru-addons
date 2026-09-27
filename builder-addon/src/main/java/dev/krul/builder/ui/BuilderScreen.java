@@ -11,6 +11,7 @@ import meteordevelopment.meteorclient.gui.widgets.containers.WView;
 import meteordevelopment.meteorclient.gui.widgets.input.WTextBox;
 import meteordevelopment.meteorclient.renderer.Texture;
 import dev.krul.builder.project.BuildPlan;
+import java.nio.file.Path;
 
 import java.util.*;
 
@@ -23,8 +24,10 @@ public final class BuilderScreen extends WindowScreen {
     private WView transcript, attachmentStrip;
     private WHorizontalList actions;
     private WTextBox composer;
+    private WTextBox referencePathBox;
     private WSection connectionSection;
     private WView connectionDetails;
+    private WLabel consentState;
     private int transcriptHash, attachmentHash, actionHash, settingsHash;
 
     public BuilderScreen(GuiTheme theme, BuilderController controller) {
@@ -32,7 +35,6 @@ public final class BuilderScreen extends WindowScreen {
         this.controller = Objects.requireNonNull(controller);
         window.view.maxHeight = Math.max(theme.scale(190), height - theme.scale(72));
         onClosed(this::disposeTextures);
-        enterAction = this::prepare;
     }
 
     @Override public void initWidgets() {
@@ -43,14 +45,26 @@ public final class BuilderScreen extends WindowScreen {
         progressSummary = add(theme.label(progressLine(state))).expandX().widget();
         saveSummary = add(theme.label(saveLine(state))).expandX().widget();
         stageSummary = add(theme.label(stageLine(state))).expandX().widget();
+        add(theme.horizontalSeparator("Cloud data disclosure — before connection or transmission"));
+        add(theme.label("Local Codex sends prompts, selected geometry and chosen images to OpenAI. Images may show names in the world.", 280)).expandX();
+        consentState = add(theme.label(consentLine(state))).expandX().widget();
+        add(theme.button("Grant / revoke consent for this session")).expandX().widget().action = () ->
+            controller.setCloudConsent(!controller.state().cloudConsent());
         add(theme.horizontalSeparator("Attachments — reviewed locally before sending"));
+        add(theme.label("Optional reference PNG path — copied locally; your original file is never modified", 280)).expandX();
+        WHorizontalList referenceInput = theme.horizontalList();
+        referencePathBox = theme.textBox("", "Path to PNG reference…");
+        ComposerInput.configure(referencePathBox);
+        referenceInput.add(referencePathBox).expandX();
+        referenceInput.add(theme.button("Add reference PNG")).widget().action = () -> addReference();
+        add(referenceInput).expandX();
         attachmentStrip = theme.view(); attachmentStrip.maxHeight = theme.scale(82);
         add(attachmentStrip).expandX();
         add(theme.horizontalSeparator("Conversation"));
         transcript = theme.view(); transcript.maxHeight = theme.scale(116);
         add(transcript).expandX();
         composer = theme.textBox("", "Describe the build or revision…");
-        composer.action = this::prepare;
+        ComposerInput.configure(composer);
         add(composer).expandX();
         actions = theme.horizontalList(); add(actions).expandX();
         connectionSection = theme.section("Connection and executable", false);
@@ -69,7 +83,13 @@ public final class BuilderScreen extends WindowScreen {
         status.set(state.status());
         planSummary.set(planLine(state)); progressSummary.set(progressLine(state)); stageSummary.set(stageLine(state));
         saveSummary.set(saveLine(state));
+        consentState.set(consentLine(state));
         refreshDynamic(state);
+    }
+
+    @Override public boolean keyPressed(int keyCode, int scanCode, int modifiers) {
+        if (ComposerInput.submitOnEnter(composer, keyCode, this::prepare)) return true;
+        return super.keyPressed(keyCode, scanCode, modifiers);
     }
 
     private void refreshDynamic(BuilderUiState state) {
@@ -103,25 +123,25 @@ public final class BuilderScreen extends WindowScreen {
             }
             if (state.attachments().isEmpty()) row.add(theme.label("No image will be sent until a screenshot is prepared."));
             attachmentStrip.add(row).expandX();
-            textures.keySet().removeIf(id -> {
-                if (state.attachments().stream().anyMatch(a -> a.id().equals(id))) return false;
-                Texture texture = textures.remove(id); disposeTexture(texture); textureHashes.remove(id); return true;
-            });
+            Set<UUID> visibleIds = state.attachments().stream().map(a -> a.id()).collect(java.util.stream.Collectors.toSet());
+            MapCleanup.removeWhere(textures, id -> !visibleIds.contains(id), this::disposeTexture);
+            textureHashes.keySet().removeIf(id -> !visibleIds.contains(id));
             attachmentHash = nextAttachmentsHash;
         }
-        int nextActionHash = Objects.hash(state.phase(), state.prepared().isPresent(), state.thumbnails().keySet(), state.attachments().stream().map(a -> a.id()).toList(), state.draft().map(BuildPlan::revision).orElse(-1L), state.accepted().map(BuildPlan::revision).orElse(-1L));
+        int nextActionHash = Objects.hash(state.phase(), state.cloudConsent(), state.prepared().isPresent(), state.thumbnails().keySet(), state.attachments().stream().map(a -> a.id()).toList(), state.draft().map(BuildPlan::revision).orElse(-1L), state.accepted().map(BuildPlan::revision).orElse(-1L));
         if (nextActionHash != actionHash) {
             actions.clear();
             boolean previewReady = state.prepared().isPresent() && state.prepared().orElseThrow().attachments().stream()
                 .allMatch(attachment -> state.thumbnails().containsKey(attachment.id()));
-            if (previewReady) actions.add(theme.button("Confirm and send to Codex")).widget().action = controller::confirmSend;
+            if (previewReady && state.cloudConsent()) actions.add(theme.button("Confirm and send to Codex")).widget().action = controller::confirmSend;
             else if (state.prepared().isPresent()) actions.add(theme.label("Preparing screenshot preview locally…"));
-            else if (state.connection().connection() == dev.krul.builder.agent.AgentClient.Connection.READY
+            else if (state.cloudConsent() && state.connection().connection() == dev.krul.builder.agent.AgentClient.Connection.READY
                     && state.connection().login() == dev.krul.builder.agent.AgentClient.Login.AUTHENTICATED
                     && state.phase() != BuilderUiState.Phase.PREPARING && state.phase() != BuilderUiState.Phase.WAITING)
                 actions.add(theme.button("Prepare for review")).widget().action = this::prepare;
-            else if (state.phase() != BuilderUiState.Phase.PREPARING && state.phase() != BuilderUiState.Phase.WAITING)
+            else if (state.cloudConsent() && state.phase() != BuilderUiState.Phase.PREPARING && state.phase() != BuilderUiState.Phase.WAITING)
                 actions.add(theme.button("Connect / sign in")).widget().action = controller::login;
+            else if (!state.cloudConsent()) actions.add(theme.label("Grant session consent before connecting or sending"));
             if (state.phase() == BuilderUiState.Phase.PREPARING || state.phase() == BuilderUiState.Phase.WAITING)
                 actions.add(theme.button("Cancel request")).widget().action = controller::cancel;
             if (state.draft().isPresent()) {
@@ -159,6 +179,13 @@ public final class BuilderScreen extends WindowScreen {
         composer.setFocused(false);
     }
 
+    private void addReference() {
+        String path = referencePathBox.get().strip();
+        if (path.isEmpty()) { controller.showNotice("Choose a PNG path before adding a reference"); return; }
+        try { controller.addReference(Path.of(path)); }
+        catch (RuntimeException invalid) { controller.showNotice("Reference path is invalid"); }
+    }
+
     private static String planLine(BuilderUiState state) {
         String draft = state.draft().map(p -> "Proposed r" + p.revision()).orElse("No proposal");
         String accepted = state.accepted().map(p -> "Accepted r" + p.revision()).orElse("No accepted plan");
@@ -175,6 +202,9 @@ public final class BuilderScreen extends WindowScreen {
     private static String saveLine(BuilderUiState state) {
         if (!state.cleanupWarnings().isEmpty()) return "Plan saved; cleanup warnings: " + String.join(" · ", state.cleanupWarnings());
         return state.nonAtomicSave() ? "Plan saved with a non-atomic filesystem fallback" : "";
+    }
+    private static String consentLine(BuilderUiState state) {
+        return state.cloudConsent() ? "Consent granted for this session" : "Consent is off; no connection or request will start";
     }
 
     private void disposeTextures() {

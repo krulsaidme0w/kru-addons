@@ -12,7 +12,10 @@ modify Meteor core.
 2. Enable Builder in Meteor and mark two opposite corners of a small test area.
    Only already-loaded client chunks are read. An unloaded or unavailable cell
    remains unknown; an incomplete scan cannot be accepted as a complete plan.
-3. Open the Builder window. Connect using a native Codex CLI executable on the
+3. Open the Builder window and read its cloud data disclosure. Grant the
+   explicit **session consent** control before connecting; consent defaults off
+   and resets when the Builder session closes. Revoke it at any time to cancel
+   pending transmission. Then connect using a native Codex CLI executable on the
    same operating system as Minecraft, then use **Sign in with Codex** for the
    Builder-owned profile. Builder requires exactly `codex-cli 0.153.4` and
    fails closed if the installed protocol or effective configuration is not
@@ -21,8 +24,11 @@ modify Meteor core.
    `codex.exe` executable path in Builder's module settings.
 4. Write a request and choose **Prepare**. Preparation refreshes the bounded
    local scan and captures a preview; it does not transmit the request.
-   Inspect the displayed text, context summary and images. Remove any image you
-   do not want included. Only **Confirm and send to Codex** transmits the
+   Optionally add a reference PNG by entering its path; Builder copies the file
+   into its private attachment store and leaves the original untouched. Inspect
+   the displayed text, context summary and images. Remove any image you do not
+   want included. The next preparation replaces its previous automatic world
+   screenshot while retaining selected reference images. Only **Confirm and send to Codex** transmits the
    reviewed request. The current world context is checked again before sending.
 5. Inspect a returned proposal and explicitly accept it to make it the active
    project. The addon renders guidance; the player places or removes blocks
@@ -32,7 +38,11 @@ modify Meteor core.
 ## Data and privacy
 
 Codex runs as a local process, but confirmed requests use the configured model
-provider and are not offline. A confirmed request can include your text, the
+provider and are not offline. The Builder screen states before connection that
+local Codex sends prompts, selected geometry and chosen images to OpenAI, and
+images may retain names visible in the world. Consent is explicit, defaults off,
+is limited to the current Builder session and can be revoked at any time. A
+confirmed request can include your text, the
 selected area's block IDs and state properties, unknown-cell locations, the
 current accepted plan, and every image still visible in the attachment list.
 The world screenshot is captured before HUD rendering; names or signs visible
