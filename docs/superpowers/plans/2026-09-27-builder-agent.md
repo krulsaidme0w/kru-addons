@@ -22,6 +22,7 @@
 - Personal paths, world context, images, histories, credentials and logs stay outside version control.
 - Existing licensing/provenance must survive any legacy source transfer. A source read or build is not live compatibility proof.
 - First transport runs Codex on the Minecraft OS, with configurable local executable; no automatic Windows-to-WSL fallback.
+- User-approved isolated Builder Codex state and separate official login; never copy credentials or inherit the ordinary Codex profile. No global environment/config changes.
 
 ## Execution and file conventions
 
@@ -181,17 +182,31 @@ assertEquals(plan, store.load(plan.project()).orElseThrow());
 **Files:** `agent/AgentRequest.java`, `agent/AgentEvent.java`, `agent/AgentClient.java`,
 `agent/CodexProcess.java`, `agent/CodexProtocol.java`, `agent/PlanResponseCodec.java`;
 tests `agent/CodexProtocolTest.java`, `agent/CodexProcessTest.java`.
+Add `agent/CodexIsolation.java` and its focused tests for child-process policy,
+owned state directory, version/effective-config checks and safe argument creation.
 
 **Interfaces:** `AgentRequest(UUID project, UUID session, long contextRevision,
 String text, WorldSnapshot context, List<Path> images)`;
 `AgentClient.start(AgentRequest, Consumer<AgentEvent>)`, `cancel()`, `close()`.
 `AgentEvent` sealed variants: Status, TextDelta, Proposal(BuildPlan), Failed, Completed.
+The request may additionally carry an immutable optional accepted-plan baseline;
+retain the listed convenience constructor. A discussion response may contain a
+message without a plan. Do not display raw structured plan JSON as chat prose.
 
 - [ ] Read local CLI help/schema and current official App Server docs using OpenAI
   Docs. Generate schema only in an ignored temporary directory. Confirm handshake,
   image input, output schema, cancellation and disabling shell/file tools before
   writing production transport. If tools cannot be constrained, stop this task and
   report the exact missing capability; do not rely on a prompt as a sandbox.
+- [ ] Use an addon-owned isolated Codex state directory and empty cwd with the
+  supported child-process configuration mechanism. Do not reassign parent shell
+  environment variables or read/copy the user's auth/config. Disable hooks,
+  plugins, apps, shell/file/network tools and skill discovery using verified keys
+  before thread creation; explicitly use empty environments for every turn.
+  Fail closed on incompatible versions or effective system/managed configuration.
+  Test startup arguments, isolated login/status, forbidden inherited config,
+  credential-free diagnostics and refusal before any model request. No real login
+  or paid requests in automated validation; dedicated login remains a user action.
 - [ ] Write protocol tests against recorded synthetic frames, never personal rollout
   files: split JSONL frames, interleaved notifications, EOF, oversized line, bad JSON,
   wrong request/session IDs, malformed proposals and cancellation races.
