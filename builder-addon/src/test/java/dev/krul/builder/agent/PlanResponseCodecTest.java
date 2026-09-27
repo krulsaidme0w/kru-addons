@@ -1,6 +1,6 @@
 package dev.krul.builder.agent;
 
-import com.google.gson.JsonObject;
+import com.google.gson.*;
 import dev.krul.builder.model.*;
 import dev.krul.builder.project.*;
 import org.junit.jupiter.api.Test;
@@ -10,7 +10,7 @@ import static org.junit.jupiter.api.Assertions.*;
 class PlanResponseCodecTest {
     private static final PlanResponseCodec CODEC = new PlanResponseCodec();
     private static final String VALID = """
-        {"message":"Here is the proposal","plan":{"revision":2,"palette":[{"key":"stone","state":{"id":"minecraft:stone","properties":{}}}],"stages":[{"id":"base","title":"Base","after":[],"operations":[{"op":"block","position":[0,0,0],"state":"stone"},{"op":"fill","min":[1,0,0],"max":[2,0,0],"state":"stone"}]}]}}
+        {"message":"Here is the proposal","plan":{"revision":2,"palette":[{"key":"stone","state":{"id":"minecraft:stone","properties":[]}}],"stages":[{"id":"base","title":"Base","after":[],"operations":[{"op":"block","position":[0,0,0],"state":"stone"},{"op":"fill","min":[1,0,0],"max":[2,0,0],"state":"stone"}]}]}}
         """;
 
     @Test void expandsInclusiveFillAndReturnsValidatedProposal() throws Exception {
@@ -59,6 +59,34 @@ class PlanResponseCodecTest {
         assertEquals("object", schema.get("type").getAsString());
         assertTrue(schema.getAsJsonObject("properties").has("message"));
         assertTrue(schema.getAsJsonObject("properties").has("plan"));
+        assertSchemaIsStrictAndSupported(schema);
+    }
+
+    @Test void closedPropertyEntryArrayDecodesBackToStateKeyProperties() throws Exception {
+        String wire = VALID.replace("\"properties\":[]", "\"properties\":[{\"name\":\"axis\",\"value\":\"y\"}]");
+        var response = CODEC.decode(wire, request(), key -> true);
+        assertEquals(Map.of("axis", "y"), response.plan().orElseThrow().stages().getFirst()
+            .targets().get(new Cell(0, 0, 0)).properties());
+    }
+
+    private static void assertSchemaIsStrictAndSupported(JsonElement element) {
+        if (element.isJsonArray()) {
+            element.getAsJsonArray().forEach(PlanResponseCodecTest::assertSchemaIsStrictAndSupported);
+        } else if (element.isJsonObject()) {
+            JsonObject object = element.getAsJsonObject();
+            assertFalse(object.has("oneOf"), "oneOf is unsupported in strict structured output");
+            if (object.has("type") && object.get("type").isJsonPrimitive()
+                    && "object".equals(object.get("type").getAsString())) {
+                assertTrue(object.has("additionalProperties") && object.get("additionalProperties").isJsonPrimitive()
+                    && object.get("additionalProperties").getAsJsonPrimitive().isBoolean()
+                    && !object.get("additionalProperties").getAsBoolean(), "object schemas must be closed");
+                JsonObject properties = object.has("properties") ? object.getAsJsonObject("properties") : new JsonObject();
+                Set<String> required = new HashSet<>();
+                if (object.has("required")) object.getAsJsonArray("required").forEach(name -> required.add(name.getAsString()));
+                assertEquals(properties.keySet(), required, "all object properties must be required");
+            }
+            object.entrySet().forEach(entry -> assertSchemaIsStrictAndSupported(entry.getValue()));
+        }
     }
 
     private static AgentRequest request() {

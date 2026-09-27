@@ -38,6 +38,12 @@ class CodexProcessTest {
         assertTrue(done.await(5, TimeUnit.SECONDS), events + " methods=" + server.methods);
         assertTrue(server.methods.contains("thread/start"));
         assertTrue(server.methods.contains("turn/start"));
+        JsonObject threadParams = server.threadParams;
+        assertEquals(Boolean.FALSE, threadParams.get("allowProviderModelFallback").getAsBoolean());
+        assertEquals(server.appCwd.toString(), threadParams.get("cwd").getAsString());
+        assertTrue(threadParams.getAsJsonArray("runtimeWorkspaceRoots").isEmpty());
+        assertEquals(server.appCwd.toString(), server.turnParams.get("cwd").getAsString());
+        assertTrue(server.turnParams.getAsJsonArray("runtimeWorkspaceRoots").isEmpty());
         assertTrue(events.stream().anyMatch(e -> e instanceof AgentEvent.Completed c && c.message().equals("A discussion answer")));
         assertFalse(events.stream().anyMatch(AgentEvent.Proposal.class::isInstance));
         assertFalse(events.stream().anyMatch(AgentEvent.TextDelta.class::isInstance));
@@ -106,6 +112,54 @@ class CodexProcessTest {
         client.close();
     }
 
+    @Test void eofDuringStartupFailsPromptlyAndDoesNotReuseTheDeadProcess() throws Exception {
+        var server = new FakeServer(false);
+        server.failAfterMethod = "config/read";
+        server.failureIsEof = true;
+        var client = new CodexProcess(temporary, key -> true, "codex", server::launch);
+        var firstFailed = new CountDownLatch(1);
+        client.start(request(), event -> { if (event instanceof AgentEvent.Failed) firstFailed.countDown(); });
+        assertTrue(firstFailed.await(2, TimeUnit.SECONDS));
+        assertFalse(server.methods.contains("thread/start"));
+
+        server.failAfterMethod = null;
+        var completed = new CountDownLatch(1);
+        client.start(request(), event -> { if (event instanceof AgentEvent.Completed) completed.countDown(); });
+        assertTrue(completed.await(5, TimeUnit.SECONDS));
+        assertEquals(2, server.versionChecks);
+        client.close();
+    }
+
+    @Test void malformedFrameDuringTurnFailsPromptlyAndDoesNotReuseTheDeadProcess() throws Exception {
+        var server = new FakeServer(false);
+        server.failAfterMethod = "turn/start";
+        server.delayCompletion = true;
+        var client = new CodexProcess(temporary, key -> true, "codex", server::launch);
+        var firstFailed = new CountDownLatch(1);
+        var firstEvents = new CopyOnWriteArrayList<AgentEvent>();
+        client.start(request(), event -> { firstEvents.add(event); if (event instanceof AgentEvent.Failed) firstFailed.countDown(); });
+        assertTrue(firstFailed.await(2, TimeUnit.SECONDS), firstEvents.toString());
+
+        server.failAfterMethod = null;
+        server.delayCompletion = false;
+        var completed = new CountDownLatch(1);
+        client.start(request(), event -> { if (event instanceof AgentEvent.Completed) completed.countDown(); });
+        assertTrue(completed.await(5, TimeUnit.SECONDS));
+        assertEquals(2, server.versionChecks);
+        client.close();
+    }
+
+    @Test void nonemptyEffectiveThreadRootsAreRejectedBeforeTurnStart() throws Exception {
+        var server = new FakeServer(false);
+        server.responseHasWorkspaceRoot = true;
+        var client = new CodexProcess(temporary, key -> true, "codex", server::launch);
+        var failed = new CountDownLatch(1);
+        client.start(request(), event -> { if (event instanceof AgentEvent.Failed) failed.countDown(); });
+        assertTrue(failed.await(5, TimeUnit.SECONDS));
+        assertFalse(server.methods.contains("turn/start"));
+        client.close();
+    }
+
     private AgentRequest request() {
         return request(UUID.randomUUID(), UUID.randomUUID());
     }
@@ -121,6 +175,11 @@ class CodexProcessTest {
         volatile int versionChecks;
         volatile Path appCwd;
         volatile boolean foreignNotifications, delayCompletion, unsupportedRequestRejected;
+        volatile boolean responseHasWorkspaceRoot;
+        volatile boolean omitDefaultThreadFields = true;
+        volatile String failAfterMethod;
+        volatile boolean failureIsEof;
+        volatile JsonObject threadParams, turnParams;
         volatile FakeProcess process;
         FakeServer(boolean unsafe) { this.unsafe = unsafe; }
         Process launch(List<String> command, Path cwd, Map<String, String> env) throws IOException {
@@ -137,6 +196,10 @@ class CodexProcessTest {
                 return "";
             }
             methods.add(method);
+            if (method.equals(failAfterMethod) && process != null) {
+                process.malformedAfterResponse = !failureIsEof;
+                process.closeAfterResponse = failureIsEof;
+            }
             if (!request.has("id")) return "";
             JsonElement id = request.get("id"); JsonObject result = new JsonObject();
             switch (method) {
@@ -147,13 +210,25 @@ class CodexProcessTest {
                     JsonObject account = new JsonObject(); account.addProperty("type", "chatgpt"); result.add("account", account);
                 }
                 case "thread/start" -> {
+                    threadParams = request.getAsJsonObject("params").deepCopy();
                     JsonObject thread = new JsonObject(); thread.addProperty("id", "thread-1");
                     thread.addProperty("modelProvider", "openai"); thread.addProperty("cwd", appCwd.toString());
+                    thread.addProperty("cliVersion", "0.153.4"); thread.addProperty("createdAt", 1);
+                    thread.addProperty("ephemeral", false); thread.addProperty("preview", "Builder test");
+                    thread.add("projectId", JsonNull.INSTANCE); thread.addProperty("sessionId", "session-1");
+                    thread.addProperty("source", "appServer"); JsonObject threadStatus = new JsonObject();
+                    threadStatus.addProperty("type", "idle"); thread.add("status", threadStatus);
+                    thread.add("turns", new JsonArray()); thread.addProperty("updatedAt", 1);
                     result.add("thread", thread);
-                    result.addProperty("approvalPolicy", "never"); JsonObject sandbox = new JsonObject(); sandbox.addProperty("type", "readOnly"); result.add("sandbox", sandbox);
-                    result.addProperty("cwd", appCwd.toString());
+                    result.addProperty("approvalPolicy", "never"); result.addProperty("approvalsReviewer", "user");
+                    JsonObject sandbox = new JsonObject(); sandbox.addProperty("type", "readOnly"); result.add("sandbox", sandbox);
+                    result.addProperty("cwd", appCwd.toString()); result.addProperty("modelProvider", "openai");
+                    result.addProperty("model", "test-model");
+                    if (responseHasWorkspaceRoot) { JsonArray roots = new JsonArray(); roots.add(appCwd.toString()); result.add("runtimeWorkspaceRoots", roots); }
+                    else if (!omitDefaultThreadFields) { result.add("runtimeWorkspaceRoots", new JsonArray()); result.add("instructionSources", new JsonArray()); }
                 }
                 case "turn/start" -> {
+                    turnParams = request.getAsJsonObject("params").deepCopy();
                     JsonObject turn = new JsonObject(); turn.addProperty("id", "turn-1"); result.add("turn", turn);
                     if (delayCompletion) return response(id, result);
                     JsonObject item = new JsonObject(); item.addProperty("type", "agentMessage"); item.addProperty("text", "{\"message\":\"A discussion answer\",\"plan\":null}");
@@ -191,7 +266,7 @@ class CodexProcessTest {
         void sendLateProposal() throws IOException {
             if (process == null) return;
             JsonObject item = new JsonObject(); item.addProperty("type", "agentMessage");
-            item.addProperty("text", "{\"message\":\"late\",\"plan\":{\"revision\":2,\"palette\":[{\"key\":\"stone\",\"state\":{\"id\":\"minecraft:stone\",\"properties\":{}}}],\"stages\":[{\"id\":\"late\",\"title\":\"Late\",\"after\":[],\"operations\":[{\"op\":\"block\",\"position\":[0,0,0],\"state\":\"stone\"}]}]}}");
+            item.addProperty("text", "{\"message\":\"late\",\"plan\":{\"revision\":2,\"palette\":[{\"key\":\"stone\",\"state\":{\"id\":\"minecraft:stone\",\"properties\":[]}}],\"stages\":[{\"id\":\"late\",\"title\":\"Late\",\"after\":[],\"operations\":[{\"op\":\"block\",\"position\":[0,0,0],\"state\":\"stone\"}]}]}}");
             JsonObject completed = new JsonObject(); completed.addProperty("threadId", "thread-1"); completed.addProperty("turnId", "turn-1"); completed.add("item", item);
             JsonObject turn = new JsonObject(); turn.addProperty("id", "turn-1"); turn.addProperty("status", "completed");
             JsonObject params = new JsonObject(); params.addProperty("threadId", "thread-1"); params.add("turn", turn);
@@ -207,6 +282,7 @@ class CodexProcessTest {
         private final RequestHandler handler;
         private final boolean completed;
         private volatile boolean alive;
+        volatile boolean malformedAfterResponse, closeAfterResponse;
         private FakeProcess(RequestHandler handler) throws IOException {
             this.handler = handler; this.completed = false; this.alive = true;
             var pipe = new PipedInputStream(); stdout = pipe; serverOut = new PipedOutputStream(pipe);
@@ -225,7 +301,9 @@ class CodexProcessTest {
                         String response = handler.handle(line.toString(StandardCharsets.UTF_8)); line.reset();
                         if (!response.isEmpty()) {
                             serverOut.write(response.getBytes(StandardCharsets.UTF_8));
+                            if (malformedAfterResponse) serverOut.write("{bad}\n".getBytes(StandardCharsets.UTF_8));
                             serverOut.flush();
+                            if (closeAfterResponse) serverOut.close();
                         }
                     } else line.write(b);
                 }

@@ -24,7 +24,7 @@ public final class CodexProcess implements AgentClient {
     private final AtomicLong ids = new AtomicLong(1);
     private volatile Status status = new Status(Connection.DISCONNECTED, Login.UNKNOWN, "Not connected");
     private volatile Process process;
-    private volatile BlockingQueue<JsonObject> frames;
+    private volatile BlockingQueue<FrameRead> frames;
     private final ArrayDeque<JsonObject> deferred = new ArrayDeque<>();
     private volatile String threadId, turnId;
     private volatile UUID project, session;
@@ -33,6 +33,10 @@ public final class CodexProcess implements AgentClient {
 
     @FunctionalInterface interface Launcher {
         Process start(List<String> command, Path cwd, Map<String, String> environment) throws IOException;
+    }
+    private record FrameRead(JsonObject frame, IOException failure) {
+        static FrameRead frame(JsonObject value) { return new FrameRead(value, null); }
+        static FrameRead failure(IOException value) { return new FrameRead(null, value); }
     }
     public CodexProcess(Path instanceDirectory, Predicate<StateKey> stateExists) {
         this(instanceDirectory, "codex", stateExists);
@@ -107,7 +111,7 @@ public final class CodexProcess implements AgentClient {
         var command = new ArrayList<String>(); command.add(executable); command.addAll(CodexIsolation.arguments());
         process = launcher.start(command, layout.cwd(), env);
         frames = new ArrayBlockingQueue<>(128);
-        Process owned = process; BlockingQueue<JsonObject> queue = frames;
+        Process owned = process; BlockingQueue<FrameRead> queue = frames;
         daemon(() -> readFrames(owned, queue), "builder-codex-stdout").start();
         daemon(() -> drainStderr(owned), "builder-codex-stderr").start();
         JsonObject client = new JsonObject(); client.addProperty("name", "kru-builder"); client.addProperty("title", "KRU Builder"); client.addProperty("version", "1");
@@ -132,7 +136,9 @@ public final class CodexProcess implements AgentClient {
         var layout = CodexIsolation.prepare(instanceDirectory);
         JsonObject params = new JsonObject(); params.addProperty("cwd", layout.cwd().toString());
         params.addProperty("approvalPolicy", "never"); params.addProperty("sandbox", "read-only");
+        params.addProperty("allowProviderModelFallback", false);
         params.add("environments", new JsonArray()); params.add("selectedCapabilityRoots", new JsonArray());
+        params.add("runtimeWorkspaceRoots", new JsonArray());
         params.addProperty("projectId", request.project().toString());
         JsonObject config = new JsonObject(); config.add("mcp_servers", new JsonObject()); params.add("config", config);
         JsonObject response = rpc("thread/start", params, STARTUP_MS, events);
@@ -143,9 +149,11 @@ public final class CodexProcess implements AgentClient {
         String expectedCwd = layout.cwd().toString();
         if (id == null || !"never".equals(str(response, "approvalPolicy"))
                 || !"readOnly".equals(str(sandbox, "type"))
+                || !"openai".equals(str(response, "modelProvider"))
                 || !"openai".equals(str(thread, "modelProvider"))
                 || !expectedCwd.equals(str(response, "cwd"))
                 || !expectedCwd.equals(str(thread, "cwd"))
+                || !emptyArrayOrDefault(response, "runtimeWorkspaceRoots") || !emptyArrayOrDefault(response, "instructionSources")
                 || (sandbox.has("networkAccess") && sandbox.get("networkAccess").getAsBoolean()))
             throw new CodexIsolation.IncompatibleException("Codex thread did not confirm the approved policy");
         threadId = id; project = request.project(); session = request.session();
@@ -153,6 +161,8 @@ public final class CodexProcess implements AgentClient {
 
     private JsonObject turnParams(AgentRequest request) throws IOException {
         JsonObject params = new JsonObject(); params.addProperty("threadId", threadId);
+        params.addProperty("cwd", CodexIsolation.prepare(instanceDirectory).cwd().toString());
+        params.add("runtimeWorkspaceRoots", new JsonArray());
         params.add("environments", new JsonArray()); params.add("input", input(request));
         params.addProperty("approvalPolicy", "never"); params.add("outputSchema", new PlanResponseCodec().outputSchema());
         return params;
@@ -222,7 +232,7 @@ public final class CodexProcess implements AgentClient {
         long responseBytes = 0;
         while (System.nanoTime() < until && !closed && !cancelled) {
             JsonObject frame = nextDeferred();
-            if (frame == null) frame = frames.poll(250, TimeUnit.MILLISECONDS);
+            if (frame == null) frame = nextFrame(frames, 250);
             if (frame == null) continue;
             responseBytes += frame.toString().getBytes(StandardCharsets.UTF_8).length + 1L;
             if (responseBytes > PlanResponseCodec.MAX_RESPONSE_BYTES) throw new IOException("Codex response exceeds 16 MiB");
@@ -267,7 +277,7 @@ public final class CodexProcess implements AgentClient {
         long until = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(timeout);
         var notifications = new ArrayList<JsonObject>();
         while (System.nanoTime() < until) {
-            JsonObject frame = frames.poll(200, TimeUnit.MILLISECONDS); if (frame == null) continue;
+            JsonObject frame = nextFrame(frames, 200); if (frame == null) continue;
             if (frame.has("method") && !frame.has("id")) { notifications.add(frame); continue; }
             if (frame.has("id") && !frame.has("method")) {
                 if (numeric(frame.get("id")) == id) {
@@ -287,6 +297,13 @@ public final class CodexProcess implements AgentClient {
         synchronized (deferred) { return deferred.pollFirst(); }
     }
 
+    private static JsonObject nextFrame(BlockingQueue<FrameRead> queue, long waitMs) throws Exception {
+        FrameRead read = queue.poll(waitMs, TimeUnit.MILLISECONDS);
+        if (read == null) return null;
+        if (read.failure() != null) throw read.failure();
+        return read.frame();
+    }
+
     private void rejectServerRequest(JsonObject frame) throws IOException {
         JsonObject error = new JsonObject(); error.addProperty("code", -32601); error.addProperty("message", "Client request is not supported");
         JsonObject response = new JsonObject(); response.add("id", frame.get("id")); response.add("error", error); write(response + "\n");
@@ -298,9 +315,25 @@ public final class CodexProcess implements AgentClient {
         if (process == null || !process.isAlive()) throw new IOException("Codex process is not running");
         process.getOutputStream().write(value.getBytes(StandardCharsets.UTF_8)); process.getOutputStream().flush();
     }
-    private static void readFrames(Process p, BlockingQueue<JsonObject> queue) {
-        try (InputStream in = p.getInputStream()) { JsonObject frame; while ((frame = CodexProtocol.readFrame(in)) != null) if (!queue.offer(frame, 2, TimeUnit.SECONDS)) break; }
-        catch (Exception ignored) { }
+    private void readFrames(Process p, BlockingQueue<FrameRead> queue) {
+        IOException failure;
+        try (InputStream in = p.getInputStream()) {
+            JsonObject frame;
+            while ((frame = CodexProtocol.readFrame(in)) != null) {
+                if (!queue.offer(FrameRead.frame(frame), 2, TimeUnit.SECONDS)) throw new IOException("Codex frame queue is full");
+            }
+            failure = new EOFException("Codex app-server closed its output");
+        } catch (IOException e) { failure = e; }
+        catch (InterruptedException e) { Thread.currentThread().interrupt(); failure = new IOException("Codex frame reader interrupted", e); }
+        queue.clear(); queue.offer(FrameRead.failure(failure));
+        synchronized (this) {
+            if (process == p) {
+                process = null; threadId = null; turnId = null; project = null; session = null;
+                synchronized (deferred) { deferred.clear(); }
+                set(Connection.DISCONNECTED, status.login(), "Codex connection failed");
+                p.destroy();
+            }
+        }
     }
     private static void drainStderr(Process p) {
         try (var in = p.getErrorStream()) { byte[] bytes = new byte[512]; int n; while ((n = in.read(bytes)) >= 0) { /* diagnostics are deliberately not forwarded */ } }
@@ -332,6 +365,11 @@ public final class CodexProcess implements AgentClient {
         });
     }
     private static long numeric(JsonElement e) { try { return e.getAsLong(); } catch (RuntimeException ex) { return Long.MIN_VALUE; } }
+    private static boolean emptyArrayOrDefault(JsonObject object, String key) {
+        if (!object.has(key)) return true;
+        JsonElement value = object.get(key);
+        return value.isJsonArray() && value.getAsJsonArray().isEmpty();
+    }
     private static JsonObject requiredObject(JsonObject o, String k) throws IOException { if (!o.has(k) || !o.get(k).isJsonObject()) throw new IOException("Malformed Codex response"); return o.getAsJsonObject(k); }
     private static String str(JsonObject o, String k) { return o.has(k) && o.get(k).isJsonPrimitive() && o.getAsJsonPrimitive(k).isString() ? o.get(k).getAsString() : null; }
     private synchronized void set(Connection c, Login l, String d) { status = new Status(c, l, d); }

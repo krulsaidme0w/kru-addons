@@ -38,26 +38,18 @@ public final class PlanResponseCodec {
 
     /** Strict output format for a message and optional structured proposal. */
     public JsonObject outputSchema() {
-        JsonObject state = obj("type", "object");
-        state.add("properties", props(Map.of("id", primitive("string"), "properties", obj("type", "object", "additionalProperties", primitive("string")))));
-        state.add("required", array("id", "properties")); state.addProperty("additionalProperties", false);
-        JsonObject blockOperation = obj("type", "object");
-        blockOperation.add("properties", props(Map.of("op", obj("enum", array("block")), "position", coordinateSchema(), "state", primitive("string"))));
-        blockOperation.add("required", array("op", "position", "state")); blockOperation.addProperty("additionalProperties", false);
-        JsonObject fillOperation = obj("type", "object");
-        fillOperation.add("properties", props(Map.of("op", obj("enum", array("fill")), "min", coordinateSchema(),
-            "max", coordinateSchema(), "state", primitive("string"))));
-        fillOperation.add("required", array("op", "min", "max", "state")); fillOperation.addProperty("additionalProperties", false);
-        JsonObject operation = obj("oneOf", arr(blockOperation, fillOperation));
-        JsonObject plan = obj("type", "object");
-        JsonObject paletteEntry = obj("type", "object");
-        paletteEntry.add("properties", props(Map.of("key", primitive("string"), "state", state)));
-        paletteEntry.add("required", array("key", "state")); paletteEntry.addProperty("additionalProperties", false);
-        plan.add("properties", props(Map.of("revision", primitive("integer"), "palette", obj("type", "array", "items", paletteEntry),
-            "stages", obj("type", "array", "items", obj("type", "object", "properties", props(Map.of(
-                "id", primitive("string"), "title", primitive("string"), "after", obj("type", "array", "items", primitive("string")),
-                "operations", obj("type", "array", "items", operation))), "required", array("id", "title", "after", "operations"), "additionalProperties", primitive("false"))))));
-        plan.add("required", array("revision", "palette", "stages")); plan.addProperty("additionalProperties", false);
+        JsonObject property = closedObject(Map.of("name", primitive("string"), "value", primitive("string")), "name", "value");
+        JsonObject state = closedObject(Map.of("id", primitive("string"), "properties", obj("type", "array", "items", property)), "id", "properties");
+        JsonObject block = closedObject(Map.of("op", obj("enum", array("block")), "position", coordinateSchema(), "state", primitive("string")), "op", "position", "state");
+        JsonObject fill = closedObject(Map.of("op", obj("enum", array("fill")), "min", coordinateSchema(),
+            "max", coordinateSchema(), "state", primitive("string")), "op", "min", "max", "state");
+        JsonObject operation = obj("anyOf", arr(block, fill));
+        JsonObject paletteEntry = closedObject(Map.of("key", primitive("string"), "state", state), "key", "state");
+        JsonObject stage = closedObject(Map.of("id", primitive("string"), "title", primitive("string"),
+            "after", obj("type", "array", "items", primitive("string")), "operations", obj("type", "array", "items", operation)),
+            "id", "title", "after", "operations");
+        JsonObject plan = closedObject(Map.of("revision", primitive("integer"), "palette", obj("type", "array", "items", paletteEntry),
+            "stages", obj("type", "array", "items", stage)), "revision", "palette", "stages");
         JsonObject root = obj("type", "object");
         root.add("properties", props(Map.of("message", primitive("string"), "plan", obj("anyOf",
             arr(plan, obj("type", "null"))))));
@@ -77,10 +69,14 @@ public final class PlanResponseCodec {
             String paletteKey = string(required(entry, "key"));
             if (paletteKey.isBlank() || paletteKey.length() > 128) throw invalid("Invalid palette key");
             JsonObject state = object(required(entry, "state")); fields(state, Set.of("id", "properties"));
-            JsonObject properties = object(required(state, "properties"));
+            JsonArray properties = array(required(state, "properties"));
             if (properties.size() > 64) throw invalid("Too many state properties");
             var values = new TreeMap<String, String>();
-            for (var property : properties.entrySet()) values.put(property.getKey(), string(property.getValue()));
+            for (JsonElement propertyElement : properties) {
+                JsonObject property = object(propertyElement); fields(property, Set.of("name", "value"));
+                String name = string(required(property, "name"));
+                if (values.putIfAbsent(name, string(required(property, "value"))) != null) throw invalid("Duplicate state property");
+            }
             try {
                 if (palette.putIfAbsent(paletteKey, new StateKey(string(required(state, "id")), values)) != null)
                     throw invalid("Duplicate palette key");
@@ -171,6 +167,10 @@ public final class PlanResponseCodec {
     private static JsonObject coordinateSchema() { return obj("type", "array", "items", primitive("integer"), "minItems", 3, "maxItems", 3); }
     private static JsonObject props(Map<String, JsonObject> properties) { JsonObject result = new JsonObject(); properties.forEach(result::add); return result; }
     private static JsonArray array(String... values) { JsonArray result = new JsonArray(); for (String value : values) result.add(value); return result; }
+    private static JsonObject closedObject(Map<String, JsonObject> properties, String... required) {
+        JsonObject result = obj("type", "object"); result.add("properties", props(properties));
+        result.add("required", array(required)); result.addProperty("additionalProperties", false); return result;
+    }
     private static JsonArray arr(JsonObject... values) { JsonArray result = new JsonArray(); for (JsonObject value : values) result.add(value); return result; }
     private static JsonObject obj(Object... pairs) { JsonObject result = new JsonObject(); for (int i = 0; i < pairs.length; i += 2) { String key = (String) pairs[i]; Object value = pairs[i + 1]; result.add(key, value instanceof JsonObject o ? o : value instanceof JsonArray a ? a : value instanceof Number n ? new JsonPrimitive(n) : value instanceof Boolean b ? new JsonPrimitive(b) : new JsonPrimitive(value.toString())); } return result; }
 }
