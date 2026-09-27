@@ -88,6 +88,17 @@ public final class ProjectSession {
     public Optional<BuildPlan> accepted() { return Optional.ofNullable(accepted); }
     public Optional<BuildPlan> draft() { return Optional.ofNullable(draft); }
 
+    /** Installs an explicitly reopened plan after validating it against the current selection and registry. */
+    public List<String> restoreAccepted(BuildPlan plan) {
+        Objects.requireNonNull(plan);
+        if (!project.equals(plan.project())) return error(WRONG_PROJECT, "Saved plan belongs to another project");
+        var errors = PlanValidator.validate(plan, bounds, stateExists);
+        if (!errors.isEmpty()) return errors;
+        accepted = plan; highestRevision = Math.max(highestRevision, plan.revision());
+        draft = null; requesting = false;
+        return List.of();
+    }
+
     public Progress progress(WorldSnapshot snapshot) {
         if (accepted == null) return new Progress(0, 0, 0, 0);
         if (!world.equals(snapshot.session()) || !bounds.equals(snapshot.bounds())) {
