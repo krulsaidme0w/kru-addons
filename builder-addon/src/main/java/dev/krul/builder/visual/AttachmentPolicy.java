@@ -24,6 +24,10 @@ public final class AttachmentPolicy implements AutoCloseable {
     private final Set<Path> captures = new HashSet<>();
     private boolean closed;
     private boolean storeReleased;
+    private final FileCopier copier;
+
+    @FunctionalInterface
+    interface FileCopier { void copy(Path source, Path target, long maximumBytes) throws IOException; }
 
     public record Attachment(UUID id, Path path, int width, int height, long encodedBytes) {}
     private static final class Entry {
@@ -34,7 +38,12 @@ public final class AttachmentPolicy implements AutoCloseable {
     }
 
     public AttachmentPolicy(Path root) throws IOException {
+        this(root, AttachmentPolicy::copyBounded);
+    }
+
+    AttachmentPolicy(Path root, FileCopier copier) throws IOException {
         this.root = Objects.requireNonNull(root).toAbsolutePath().normalize();
+        this.copier = Objects.requireNonNull(copier);
         Files.createDirectories(this.root);
         store = Files.createDirectory(this.root.resolve(PREFIX + ProcessHandle.current().pid() + "-" + UUID.randomUUID()));
         lockChannel = FileChannel.open(store.resolve(".owner.lock"), StandardOpenOption.CREATE_NEW, StandardOpenOption.WRITE);
@@ -45,15 +54,22 @@ public final class AttachmentPolicy implements AutoCloseable {
         ensureOpen();
         Objects.requireNonNull(source, "source");
         if (entries.size() >= MAX_ATTACHMENTS) throw new IllegalArgumentException("At most four images are allowed");
-        ImageFacts facts = validate(source);
         long total = entries.values().stream().mapToLong(e -> e.attachment.encodedBytes()).sum();
-        if (facts.bytes > MAX_ENCODED_BYTES - total) throw new IllegalArgumentException("Combined image input exceeds 8 MiB");
         UUID id = UUID.randomUUID(); Path copy = store.resolve("image-" + id + ".png");
-        try { Files.copy(source, copy); }
-        catch (IOException e) { throw new IllegalArgumentException("Unable to copy image", e); }
-        var attachment = new Attachment(id, copy, facts.width, facts.height, facts.bytes);
-        entries.put(id, new Entry(attachment));
-        return attachment;
+        try {
+            copier.copy(source, copy, MAX_ENCODED_BYTES - total);
+            ImageFacts facts = validate(copy);
+            if (facts.bytes > MAX_ENCODED_BYTES - total) throw new IllegalArgumentException("Combined image input exceeds 8 MiB");
+            var attachment = new Attachment(id, copy, facts.width, facts.height, facts.bytes);
+            entries.put(id, new Entry(attachment));
+            return attachment;
+        } catch (IOException failure) {
+            try { Files.deleteIfExists(copy); } catch (IOException ignored) { }
+            throw new IllegalArgumentException("Unable to copy image", failure);
+        } catch (RuntimeException failure) {
+            try { Files.deleteIfExists(copy); } catch (IOException ignored) { }
+            throw failure;
+        }
     }
 
     public synchronized List<Attachment> draft() {
@@ -137,6 +153,24 @@ public final class AttachmentPolicy implements AutoCloseable {
     }
 
     private record ImageFacts(int width, int height, long bytes) {}
+
+    private static void copyBounded(Path source, Path target, long maximumBytes) throws IOException {
+        try (var input = Files.newInputStream(source);
+             var output = Files.newOutputStream(target, StandardOpenOption.CREATE_NEW, StandardOpenOption.WRITE)) {
+            byte[] buffer = new byte[8192];
+            long copied = 0;
+            int count;
+            while ((count = input.read(buffer)) != -1) {
+                if (count > maximumBytes - copied) throw new IllegalArgumentException("Combined image input exceeds 8 MiB");
+                output.write(buffer, 0, count);
+                copied += count;
+            }
+        } catch (IOException | RuntimeException failure) {
+            try { Files.deleteIfExists(target); } catch (IOException ignored) { }
+            throw failure;
+        }
+    }
+
     private static ImageFacts validate(Path path) {
         try {
             long bytes = Files.size(path);

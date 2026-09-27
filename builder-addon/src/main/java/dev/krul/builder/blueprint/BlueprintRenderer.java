@@ -110,6 +110,8 @@ public final class BlueprintRenderer {
         if (built == null) return;
         boolean blend = GL11.glIsEnabled(GL11.GL_BLEND), depth = GL11.glIsEnabled(GL11.GL_DEPTH_TEST);
         boolean cull = GL11.glIsEnabled(GL11.GL_CULL_FACE), depthMask = GL11.glGetBoolean(GL11.GL_DEPTH_WRITEMASK);
+        var previousShader = RenderSystem.getShader();
+        int previousTexture = RenderSystem.getShaderTexture(0);
         try {
             RenderSystem.enableBlend(); RenderSystem.defaultBlendFunc(); RenderSystem.depthMask(false);
             if (throughWalls) RenderSystem.disableDepthTest(); else RenderSystem.enableDepthTest();
@@ -121,6 +123,8 @@ public final class BlueprintRenderer {
             if (depth) RenderSystem.enableDepthTest(); else RenderSystem.disableDepthTest();
             if (cull) RenderSystem.enableCull(); else RenderSystem.disableCull();
             if (blend) RenderSystem.enableBlend(); else RenderSystem.disableBlend();
+            RenderSystem.setShader(() -> previousShader);
+            RenderSystem.setShaderTexture(0, previousTexture);
         }
     }
 

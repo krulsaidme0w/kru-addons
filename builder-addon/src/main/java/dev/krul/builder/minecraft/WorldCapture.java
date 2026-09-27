@@ -17,7 +17,6 @@ public final class WorldCapture {
     private final MinecraftClient client;
     private final AttachmentPolicy policy;
     private final Executor encoder;
-    private CompletableFuture<Path> pending;
 
     public WorldCapture(MinecraftClient client, AttachmentPolicy policy, Executor encoder) {
         this.client = Objects.requireNonNull(client);
@@ -26,21 +25,18 @@ public final class WorldCapture {
     }
 
     /** Requests the next RenderAfterWorldEvent. The returned path is addon-owned until released. */
-    public synchronized CompletableFuture<Path> capture() {
-        if (pending != null && !pending.isDone()) throw new IllegalStateException("A world capture is already pending");
-        pending = new CompletableFuture<>();
-        CaptureFrame.pending = true;
-        return pending;
+    public CompletableFuture<Path> capture() {
+        return CaptureLifecycle.request();
     }
 
     /** Keeps the addon preview out of the framebuffer for the pending capture frame. */
-    public static boolean suppressPreviewThisFrame() { return CaptureFrame.pending; }
+    public static boolean suppressPreviewThisFrame() { return CaptureLifecycle.suppressPreview(); }
 
     @EventHandler
     public void onAfterWorld(RenderAfterWorldEvent ignored) {
         CompletableFuture<Path> request;
-        synchronized (this) { request = pending; if (request == null || request.isDone()) return; }
-        if (!client.isOnThread()) { request.completeExceptionally(new IllegalStateException("Capture event was not on client thread")); return; }
+        request = CaptureLifecycle.current(); if (request == null || request.isDone()) return;
+        if (!client.isOnThread()) { CaptureLifecycle.failWrongThread(request); return; }
         if (client.world == null) { request.completeExceptionally(new IllegalStateException("No client world to capture")); finish(request); return; }
         try {
             int width = client.getWindow().getFramebufferWidth(), height = client.getWindow().getFramebufferHeight();
@@ -70,12 +66,8 @@ public final class WorldCapture {
         finally { finish(request); }
     }
 
-    private synchronized void finish(CompletableFuture<Path> request) {
-        if (pending == request) { pending = null; CaptureFrame.pending = false; }
-    }
+    private void finish(CompletableFuture<Path> request) { CaptureLifecycle.finish(request); }
 
     /** Release after attachment import or request completion. */
     public void release(Path capture) { policy.releaseCapture(capture); }
-
-    private static final class CaptureFrame { private static volatile boolean pending; }
 }

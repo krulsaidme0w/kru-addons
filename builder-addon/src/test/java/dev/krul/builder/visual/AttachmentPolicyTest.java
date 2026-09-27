@@ -49,6 +49,22 @@ class AttachmentPolicyTest {
         }
     }
 
+    @Test void validatesTheOwnedCopyWhenSourceChangesAtCopyBoundary() throws Exception {
+        var source = image("source.png", 8, 4);
+        var replacement = image("replacement.png", 1281, 1);
+        try (var policy = new AttachmentPolicy(temp, (ignored, target, ignoredLimit) -> Files.copy(replacement, target))) {
+            assertThrows(IllegalArgumentException.class, () -> policy.add(source));
+            assertTrue(policy.draft().isEmpty());
+            Path store;
+            try (var stores = Files.list(temp)) {
+                store = stores.filter(path -> path.getFileName().toString().startsWith("kru-builder-images-")).findFirst().orElseThrow();
+            }
+            try (var files = Files.list(store)) {
+                assertTrue(files.noneMatch(path -> path.getFileName().toString().startsWith("image-")));
+            }
+        }
+    }
+
     @Test void combinedEncodedBytesIncludeEveryFileAndAcceptExactLimit() throws Exception {
         var small = Files.readAllBytes(image("source.png", 1, 1));
         // PNG permits trailing bytes: preserves a real decodable image, tests encoded rather than pixel size.
