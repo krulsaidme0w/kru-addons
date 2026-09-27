@@ -93,7 +93,7 @@ public final class BuilderModule extends Module {
 
     @EventHandler private void onRender(Render3DEvent event) {
         syncContext();
-        scans.bounds().ifPresent(bounds -> event.renderer.box(
+        if (!WorldCapture.suppressPreviewThisFrame()) scans.bounds().ifPresent(bounds -> event.renderer.box(
             bounds.min().x(), bounds.min().y(), bounds.min().z(),
             (double) bounds.max().x() + 1, (double) bounds.max().y() + 1, (double) bounds.max().z() + 1,
             FILL, OUTLINE, ShapeMode.Both, 0));

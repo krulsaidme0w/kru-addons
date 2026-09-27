@@ -5,8 +5,7 @@ Gradle 8.8, Fabric Loom 1.7.4, Java 21, Minecraft 1.21.1, Yarn 1.21.1+build.3,
 Fabric Loader 0.16.14, official external Meteor Client 0.5.8, JUnit 5.10.2 and
 ASM 9.6 (tests only). Names, version and addon metadata are adapted for Builder;
 tests inspect the remapped archive and both archives include these notices.
-No Tools feature implementation, legacy Blueprint source or other addon code
-is copied or imported.
+No Tools feature implementation or other addon code is copied or imported.
 
 The Gradle wrapper JAR and launchers are byte-identical to tools-addon. They
 originate from Gradle (https://github.com/gradle/gradle), copyright the original
@@ -18,3 +17,14 @@ The GPL license text is copied unchanged from tools-addon/LICENSE. Builder's
 original sources are GPL-3.0-or-later. Meteor Client remains an external GPL
 dependency (https://github.com/MeteorDevelopment/meteor-client); Minecraft,
 Fabric and test/build libraries are not bundled in the addon archive.
+
+`BlueprintRenderer` selectively adapts textured quad extraction, block atlas UVs,
+tint and face shading from CobbHelper's `src/main/java/meteordevelopment/meteorclient/blueprint/BlueprintGhostRenderer.java`,
+source commit `623562be05f2aca40846ae71a101266fc7be52e1`. The source has no
+file-level copyright or license header; the legacy repository's root license is
+GNU GPL version 3, which is retained through this addon's GPL-3.0-or-later
+license. The adaptation draws only validated full-state targets, keeps removal
+and replacement outlines separate, never mutates blocks, and restores the
+previous blend, depth-test, cull and depth-write states instead of assuming GL
+defaults. Resource-pack variants and shader compatibility remain unverified in a
+live client.
