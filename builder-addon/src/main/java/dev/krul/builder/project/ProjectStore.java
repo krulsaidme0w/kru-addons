@@ -10,17 +10,26 @@ import java.util.*;
 public final class ProjectStore {
     /** Caller supplies instanceDirectory.resolve(DIRECTORY); no global/user path is inferred. */
     public static final String DIRECTORY = "kru-builder";
-    /** Task7 must surface nonAtomicFallback to the user; crash atomicity was unavailable. */
-    public record SaveResult(boolean nonAtomicFallback) {}
+    /** A returned result means committed. Task7 must surface fallback and cleanup warnings separately. */
+    public record SaveResult(boolean nonAtomicFallback, List<IOException> cleanupWarnings) {
+        public SaveResult { cleanupWarnings = List.copyOf(cleanupWarnings); }
+        public SaveResult(boolean nonAtomicFallback) { this(nonAtomicFallback, List.of()); }
+    }
     @FunctionalInterface interface Move { void move(Path from, Path to, CopyOption... options) throws IOException; }
+    @FunctionalInterface interface Delete { void deleteIfExists(Path path) throws IOException; }
     private final Path root;
     private final Move move;
+    private final Delete delete;
     private final ProjectCodec codec = new ProjectCodec();
 
     public ProjectStore(Path root) { this(root, Files::move); }
     ProjectStore(Path root, Move move) {
+        this(root, move, Files::deleteIfExists);
+    }
+    ProjectStore(Path root, Move move, Delete delete) {
         this.root = Objects.requireNonNull(root).toAbsolutePath().normalize();
         this.move = Objects.requireNonNull(move);
+        this.delete = Objects.requireNonNull(delete);
     }
 
     /** Blocking I/O on immutable input. The caller owns background scheduling and error presentation. */
@@ -30,6 +39,9 @@ public final class ProjectStore {
         Path destination = path(plan.project());
         rejectLink(destination);
         Path temporary = Files.createTempFile(root, ".project-", ".tmp");
+        var cleanupWarnings = new ArrayList<IOException>();
+        Throwable primary = null;
+        boolean nonAtomicFallback = false;
         try {
             try (var channel = FileChannel.open(temporary, StandardOpenOption.WRITE)) {
                 var buffer = ByteBuffer.wrap(bytes);
@@ -38,16 +50,20 @@ public final class ProjectStore {
             }
             try {
                 move.move(temporary, destination, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
-                return new SaveResult(false);
             } catch (AtomicMoveNotSupportedException unsupported) {
-                replaceWithBackup(temporary, destination);
-                return new SaveResult(true);
+                replaceWithBackup(temporary, destination, cleanupWarnings);
+                nonAtomicFallback = true;
             }
-        } finally { Files.deleteIfExists(temporary); }
+        } catch (IOException | RuntimeException | Error failure) {
+            primary = failure;
+            throw failure;
+        } finally { cleanup(temporary, primary, cleanupWarnings); }
+        return new SaveResult(nonAtomicFallback, cleanupWarnings);
     }
 
-    private void replaceWithBackup(Path temporary, Path destination) throws IOException {
+    private void replaceWithBackup(Path temporary, Path destination, List<IOException> cleanupWarnings) throws IOException {
         Path backup = null;
+        Throwable primary = null;
         try {
             rejectLink(destination);
             if (Files.exists(destination, LinkOption.NOFOLLOW_LINKS)) {
@@ -67,7 +83,18 @@ public final class ProjectStore {
                 }
                 throw failure;
             }
-        } finally { if (backup != null) Files.deleteIfExists(backup); }
+        } catch (IOException | RuntimeException | Error failure) {
+            primary = failure;
+            throw failure;
+        } finally { if (backup != null) cleanup(backup, primary, cleanupWarnings); }
+    }
+
+    private void cleanup(Path file, Throwable primary, List<IOException> warnings) {
+        try { delete.deleteIfExists(file); }
+        catch (IOException failure) {
+            if (primary == null) warnings.add(failure);
+            else if (failure != primary) primary.addSuppressed(failure);
+        }
     }
 
     /** Empty means missing only; corruption, unsupported versions and I/O failures are errors. */

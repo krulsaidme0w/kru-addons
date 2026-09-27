@@ -146,4 +146,73 @@ class ProjectStoreTest {
         assertEquals(previous, Files.readString(file()));
         try (var paths = Files.list(tempDir)) { assertEquals(1, paths.count()); }
     }
+
+    private static void requireFallback(Path from, Path to, CopyOption... options) throws IOException {
+        if (List.of(options).contains(StandardCopyOption.ATOMIC_MOVE))
+            throw new AtomicMoveNotSupportedException(from.toString(), to.toString(), "test filesystem");
+    }
+
+    @Test void committedFallbackReportsBackupCleanupWarningAndKeepsNewContents() throws Exception {
+        Files.writeString(file(), JSON);
+        var cleanup = new IOException("backup deletion failed");
+        var store = new ProjectStore(tempDir, (from, to, options) -> {
+            requireFallback(from, to, options); Files.move(from, to, options);
+        }, path -> {
+            if (path.getFileName().toString().startsWith(".previous-")) throw cleanup;
+            Files.deleteIfExists(path);
+        });
+        var next = new BuildPlan(ID, 3, 7, plan().stages());
+        var result = assertDoesNotThrow(() -> store.save(next));
+        assertTrue(result.nonAtomicFallback());
+        assertEquals(List.of(cleanup), result.cleanupWarnings());
+        assertEquals(next, store.load(ID).orElseThrow());
+        try (var paths = Files.list(tempDir)) {
+            var remaining = paths.filter(p -> !p.equals(file())).toList();
+            assertEquals(1, remaining.size());
+            assertEquals(JSON, Files.readString(remaining.getFirst()));
+        }
+    }
+
+    @Test void committedAtomicSaveReportsTempCleanupWarning() throws Exception {
+        var cleanup = new IOException("temp deletion failed");
+        var store = new ProjectStore(tempDir, Files::move, path -> { throw cleanup; });
+        var result = assertDoesNotThrow(() -> store.save(plan()));
+        assertFalse(result.nonAtomicFallback());
+        assertEquals(List.of(cleanup), result.cleanupWarnings());
+        assertEquals(plan(), store.load(ID).orElseThrow());
+    }
+
+    @Test void replacementFailureRemainsPrimaryWithBothCleanupFailuresSuppressed() throws Exception {
+        Files.writeString(file(), JSON);
+        var primary = new IOException("replacement failed");
+        var backupCleanup = new IOException("backup cleanup failed");
+        var tempCleanup = new IOException("temp cleanup failed");
+        var store = new ProjectStore(tempDir, (from, to, options) -> {
+            requireFallback(from, to, options); Files.delete(to); throw primary;
+        }, path -> {
+            throw path.getFileName().toString().startsWith(".previous-") ? backupCleanup : tempCleanup;
+        });
+        assertSame(primary, assertThrows(IOException.class, () -> store.save(plan())));
+        assertArrayEquals(new Throwable[]{backupCleanup, tempCleanup}, primary.getSuppressed());
+        assertEquals(JSON, Files.readString(file()));
+    }
+
+    @Test void restoreFailureAndTempCleanupDoNotMaskReplacementFailure() throws Exception {
+        Files.writeString(file(), JSON);
+        var primary = new IOException("replacement failed");
+        var cleanup = new IOException("temp cleanup failed");
+        var store = new ProjectStore(tempDir, (from, to, options) -> {
+            requireFallback(from, to, options);
+            Files.delete(to); Files.createDirectory(to); Files.writeString(to.resolve("occupied"), "block restoration");
+            throw primary;
+        }, path -> { throw cleanup; });
+        assertSame(primary, assertThrows(IOException.class, () -> store.save(plan())));
+        assertEquals(2, primary.getSuppressed().length);
+        assertInstanceOf(IOException.class, primary.getSuppressed()[0]);
+        assertSame(cleanup, primary.getSuppressed()[1]);
+        try (var paths = Files.list(tempDir)) {
+            var backup = paths.filter(p -> p.getFileName().toString().startsWith(".previous-")).findFirst().orElseThrow();
+            assertEquals(JSON, Files.readString(backup));
+        }
+    }
 }
