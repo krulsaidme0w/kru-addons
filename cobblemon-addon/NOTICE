@@ -1,0 +1,24 @@
+KRU Cobblemon addon
+
+Feature implementation and behavioral tests were extracted from the user's
+cobbhelperv2 worktree (HEAD eb211f2 at extraction) on 2026-09-20. The original
+repository remains unchanged and is not a build or runtime dependency.
+
+Retained feature families: Discovery, Dungeon Discovery, Type Chart and Battle
+Matchups. Adaptations include addon registration, package relocation, removal of
+excluded automation/recording hooks, and configurable server recognition rules.
+See ../docs/migration-audit.md in the source distribution for scope and limitations.
+The accompanying LICENSE contains the GNU General Public License, version 3.
+
+Meteor Client and its Starscript library remain external upstream dependencies:
+https://github.com/MeteorDevelopment/meteor-client
+https://github.com/MeteorDevelopment/starscript
+The entrypoint/build arrangement follows the official addon template:
+https://github.com/MeteorDevelopment/meteor-addon-template
+No Meteor Client implementation classes are included in this addon JAR.
+
+The UI Utils controls independently implement behavior studied in:
+https://github.com/MrBreakNFix/ui-utils
+Reference commit: b1342f381a2ce6054b0e42840fd937af5fdbc7e7.
+No source implementation from that project is copied or bundled here.
+See ../docs/ui-utils-parity.md for behavioral scope and differences.

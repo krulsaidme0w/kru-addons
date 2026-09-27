@@ -1,0 +1,6 @@
+KRU Tools includes behavior adapted from DupersUnited's GPL-licensed GUI and
+packet utility components. The original project is available at:
+https://github.com/DupersUnited/dupersunited-mod
+
+KRU Tools also uses the official Meteor Client as an external runtime
+dependency and does not bundle or modify Meteor Client classes.

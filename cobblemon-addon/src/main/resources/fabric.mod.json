@@ -1,0 +1,14 @@
+{
+  "schemaVersion": 1,
+  "id": "kru-cobblemon",
+  "version": "${version}",
+  "name": "KRU Cobblemon",
+  "description": "Independent Cobblemon discovery, compact Type Chart, battle-only type matchups and container/PC UI utilities for Meteor.",
+  "authors": ["krul"],
+  "license": "GPL-3.0-only",
+  "environment": "client",
+  "entrypoints": {"meteor": ["dev.krul.cobblemon.CobblemonAddon"]},
+  "mixins": ["kru-cobblemon.mixins.json"],
+  "custom": {"meteor-client:color": "97,184,133"},
+  "depends": {"java": ">=21", "minecraft": "1.21.1", "fabricloader": ">=0.16.14", "meteor-client": "0.5.8", "cobblemon": "*"}
+}

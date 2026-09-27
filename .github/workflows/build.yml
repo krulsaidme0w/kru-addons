@@ -1,0 +1,82 @@
+name: Build and release
+
+on:
+  pull_request:
+  push:
+    branches: ['**']
+    tags: ['cobblemon-v*', 'tools-v*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        addon: [cobblemon-addon, tools-addon]
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
+        with:
+          distribution: temurin
+          java-version: '21'
+      - name: Distribution tests
+        run: python3 -m unittest discover -s distribution -v
+      - name: Build and test
+        working-directory: ${{ matrix.addon }}
+        run: bash ./gradlew --no-daemon build
+      - name: Verify and package
+        env:
+          ADDON: ${{ matrix.addon }}
+        run: python3 distribution/release.py "$ADDON"
+      - name: Upload verified release assets
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: ${{ matrix.addon }}
+          path: dist/${{ matrix.addon }}/
+          if-no-files-found: error
+          retention-days: 14
+      - name: Upload test reports
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: tests-${{ matrix.addon }}
+          path: |
+            ${{ matrix.addon }}/build/reports/tests/
+            ${{ matrix.addon }}/build/test-results/
+          if-no-files-found: warn
+          retention-days: 14
+
+  draft-release:
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: '*-addon'
+          path: dist
+      - name: Validate tag and create draft
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          assets=$(python3 distribution/release.py "$RELEASE_TAG" --check-tag)
+          gh release create "$RELEASE_TAG" "$assets"/* --draft --verify-tag --generate-notes --title "$RELEASE_TAG"

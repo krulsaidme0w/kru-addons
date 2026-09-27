@@ -1,0 +1,105 @@
+package dev.krul.cobblemon.battle.matrix;
+
+import dev.krul.cobblemon.battle.MoveCategory;
+import dev.krul.cobblemon.battle.PokemonType;
+import dev.krul.cobblemon.battle.TypeEffectiveness;
+import dev.krul.cobblemon.battle.matchup.MatchupSnapshot;
+import dev.krul.cobblemon.battle.matchup.MatchupSnapshot.Fact;
+import dev.krul.cobblemon.battle.matchup.MatchupSnapshot.Fighter;
+import dev.krul.cobblemon.battle.matchup.MatchupSnapshot.Freshness;
+import dev.krul.cobblemon.battle.matchup.MatchupSnapshot.Move;
+
+import java.util.ArrayList;
+import java.util.List;
+
+/** Pure projection and type-chart math. It never ranks moves or estimates damage. */
+public final class BattleMatrixModel {
+    private BattleMatrixModel() {}
+
+    public record MoveGroup(Fighter fighter, List<Move> moves) {
+        public MoveGroup { moves = List.copyOf(moves); }
+    }
+
+    public static List<MoveGroup> groups(MatchupSnapshot snapshot) {
+        if (snapshot == null) return List.of();
+        List<MoveGroup> result = new ArrayList<>();
+        for (Fighter fighter : snapshot.own().stream().limit(6).toList()) {
+            List<Move> known = fighter.moves().stream()
+                .filter(move -> move != null && move.data() != null)
+                .limit(4)
+                .toList();
+            result.add(new MoveGroup(fighter, known));
+        }
+        return List.copyOf(result);
+    }
+
+    public static List<Fighter> enemies(MatchupSnapshot snapshot) {
+        if (snapshot == null) return List.of();
+        return snapshot.enemies().stream().limit(6).toList();
+    }
+
+    public static BattleMatrixCell evaluate(Move move, Fighter target) {
+        if (move == null || move.data() == null) return unknown("Move details are unknown.", move, target);
+        if (move.data().category() == MoveCategory.STATUS) {
+            return cell("—", null, BattleMatrixCell.Evidence.NOT_APPLICABLE,
+                "Status move; no type-effectiveness multiplier.", move, target);
+        }
+        if (move.special() || move.data().category() == MoveCategory.UNKNOWN) {
+            return unknown("Special or dynamic move semantics are not represented by the ordinary type chart; nominal type is not confirmed.", move, target);
+        }
+        if (move.data().type() == null) return unknown("Move type unknown.", move, target);
+        if (target == null) return unknown("Target unknown.", move, null);
+
+        TypeBasis basis = currentTypes(target);
+        if (basis.types().isEmpty()) {
+            return unknown("Current target typing is not confirmed. No species, profile or last-observed fallback.", move, target);
+        }
+
+        double multiplier = TypeEffectiveness.multiplier(move.data().type(), basis.types().toArray(PokemonType[]::new));
+        String value = format(multiplier);
+        return cell(value, multiplier, basis.evidence(), basis.description(), move, target);
+    }
+
+    private static TypeBasis currentTypes(Fighter target) {
+        Fact<List<PokemonType>> fact = target.facts().types();
+        if (fact.known() && !fact.value().isEmpty() && fact.freshness() == Freshness.CURRENT) {
+            return new TypeBasis(fact.value(), BattleMatrixCell.Evidence.CURRENT,
+                "Current battle types" + source(fact.source()));
+        }
+        return new TypeBasis(List.of(), BattleMatrixCell.Evidence.UNKNOWN, "");
+    }
+
+    private static BattleMatrixCell unknown(String reason, Move move, Fighter target) {
+        return cell("?", null, BattleMatrixCell.Evidence.UNKNOWN, reason, move, target);
+    }
+
+    private static BattleMatrixCell cell(String label, Double multiplier, BattleMatrixCell.Evidence evidence,
+                                         String basis, Move move, Fighter target) {
+        List<String> tooltip = new ArrayList<>();
+        String moveName = move == null || move.data() == null ? "Unknown move" : move.data().name();
+        String targetName = target == null || target.name().isBlank() ? "Unknown target" : target.name();
+        tooltip.add(moveName + " -> " + targetName + ": " + label + (multiplier == null ? "" : "x"));
+        if (multiplier != null) tooltip.add("Reference only: type chart; not damage. Abilities, items and weather are not included.");
+        if (basis != null && !basis.isBlank()) tooltip.add(basis + (basis.endsWith(".") ? "" : "."));
+        if (move != null && move.availabilityKnown()) {
+            String pp = move.pp() < 0 ? "PP unknown" : "PP " + move.pp();
+            tooltip.add(pp + (move.disabled() ? "; disabled" : "; currently available"));
+        }
+        return new BattleMatrixCell(label, multiplier, evidence, tooltip);
+    }
+
+    private static String source(String source) {
+        return source == null || source.isBlank() ? "" : " (" + source + ")";
+    }
+
+    private static String format(double value) {
+        if (value == .25) return "¼";
+        if (value == .5) return "½";
+        if (value == Math.rint(value)) return Integer.toString((int) value);
+        return Double.toString(value);
+    }
+
+    private record TypeBasis(List<PokemonType> types, BattleMatrixCell.Evidence evidence, String description) {
+        private TypeBasis { types = List.copyOf(types); }
+    }
+}

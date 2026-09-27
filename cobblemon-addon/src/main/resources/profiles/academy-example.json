@@ -1,0 +1,351 @@
+{
+  "version": 1,
+  "rules": [
+    {
+      "id": "display-ball-1150",
+      "target": "POKE_BALL",
+      "label": "Poké Ball",
+      "all": [
+        {
+          "field": "dimension",
+          "equals": "dungeons:dungeon"
+        },
+        {
+          "field": "kind",
+          "equals": "ENTITY"
+        },
+        {
+          "field": "registry_id",
+          "equals": "minecraft:item_display"
+        },
+        {
+          "field": "item_id",
+          "equals": "minecraft:paper"
+        },
+        {
+          "field": "model_data",
+          "equals": 1150
+        }
+      ]
+    },
+    {
+      "id": "stand-ball-1150",
+      "target": "POKE_BALL",
+      "label": "Poké Ball",
+      "all": [
+        {
+          "field": "dimension",
+          "equals": "dungeons:dungeon"
+        },
+        {
+          "field": "kind",
+          "equals": "ENTITY"
+        },
+        {
+          "field": "registry_id",
+          "equals": "minecraft:armor_stand"
+        },
+        {
+          "field": "head_item_id",
+          "equals": "minecraft:paper"
+        },
+        {
+          "field": "head_model_data",
+          "equals": 1150
+        }
+      ]
+    },
+    {
+      "id": "display-ball-1151",
+      "target": "POKE_BALL",
+      "label": "Ultra Ball",
+      "all": [
+        {
+          "field": "dimension",
+          "equals": "dungeons:dungeon"
+        },
+        {
+          "field": "kind",
+          "equals": "ENTITY"
+        },
+        {
+          "field": "registry_id",
+          "equals": "minecraft:item_display"
+        },
+        {
+          "field": "item_id",
+          "equals": "minecraft:paper"
+        },
+        {
+          "field": "model_data",
+          "equals": 1151
+        }
+      ]
+    },
+    {
+      "id": "stand-ball-1151",
+      "target": "POKE_BALL",
+      "label": "Ultra Ball",
+      "all": [
+        {
+          "field": "dimension",
+          "equals": "dungeons:dungeon"
+        },
+        {
+          "field": "kind",
+          "equals": "ENTITY"
+        },
+        {
+          "field": "registry_id",
+          "equals": "minecraft:armor_stand"
+        },
+        {
+          "field": "head_item_id",
+          "equals": "minecraft:paper"
+        },
+        {
+          "field": "head_model_data",
+          "equals": 1151
+        }
+      ]
+    },
+    {
+      "id": "display-ball-1152",
+      "target": "POKE_BALL",
+      "label": "Master Ball",
+      "all": [
+        {
+          "field": "dimension",
+          "equals": "dungeons:dungeon"
+        },
+        {
+          "field": "kind",
+          "equals": "ENTITY"
+        },
+        {
+          "field": "registry_id",
+          "equals": "minecraft:item_display"
+        },
+        {
+          "field": "item_id",
+          "equals": "minecraft:paper"
+        },
+        {
+          "field": "model_data",
+          "equals": 1152
+        }
+      ]
+    },
+    {
+      "id": "stand-ball-1152",
+      "target": "POKE_BALL",
+      "label": "Master Ball",
+      "all": [
+        {
+          "field": "dimension",
+          "equals": "dungeons:dungeon"
+        },
+        {
+          "field": "kind",
+          "equals": "ENTITY"
+        },
+        {
+          "field": "registry_id",
+          "equals": "minecraft:armor_stand"
+        },
+        {
+          "field": "head_item_id",
+          "equals": "minecraft:paper"
+        },
+        {
+          "field": "head_model_data",
+          "equals": 1152
+        }
+      ]
+    },
+    {
+      "id": "display-ball-1478",
+      "target": "POKE_BALL",
+      "label": "Dream Ball",
+      "all": [
+        {
+          "field": "dimension",
+          "equals": "dungeons:dungeon"
+        },
+        {
+          "field": "kind",
+          "equals": "ENTITY"
+        },
+        {
+          "field": "registry_id",
+          "equals": "minecraft:item_display"
+        },
+        {
+          "field": "item_id",
+          "equals": "minecraft:paper"
+        },
+        {
+          "field": "model_data",
+          "equals": 1478
+        }
+      ]
+    },
+    {
+      "id": "stand-ball-1478",
+      "target": "POKE_BALL",
+      "label": "Dream Ball",
+      "all": [
+        {
+          "field": "dimension",
+          "equals": "dungeons:dungeon"
+        },
+        {
+          "field": "kind",
+          "equals": "ENTITY"
+        },
+        {
+          "field": "registry_id",
+          "equals": "minecraft:armor_stand"
+        },
+        {
+          "field": "head_item_id",
+          "equals": "minecraft:paper"
+        },
+        {
+          "field": "head_model_data",
+          "equals": 1478
+        }
+      ]
+    },
+    {
+      "id": "chest",
+      "target": "CHEST",
+      "label": "Gilded Chest",
+      "all": [
+        {
+          "field": "dimension",
+          "equals": "dungeons:dungeon"
+        },
+        {
+          "field": "kind",
+          "equals": "BLOCK_ENTITY"
+        },
+        {
+          "field": "registry_id",
+          "equals": "cobblemon:chest"
+        }
+      ]
+    },
+    {
+      "id": "gilded-chest",
+      "target": "CHEST",
+      "label": "Gilded Chest",
+      "all": [
+        {
+          "field": "dimension",
+          "equals": "dungeons:dungeon"
+        },
+        {
+          "field": "kind",
+          "equals": "BLOCK_ENTITY"
+        },
+        {
+          "field": "registry_id",
+          "suffix": ":gilded_chest"
+        }
+      ]
+    },
+    {
+      "id": "guardian",
+      "target": "GUARDIAN",
+      "label": "{observation.name}",
+      "all": [
+        {
+          "field": "dimension",
+          "equals": "dungeons:dungeon"
+        },
+        {
+          "field": "kind",
+          "equals": "ENTITY"
+        },
+        {
+          "field": "registry_id",
+          "equals": "cobblemon:npc"
+        },
+        {
+          "field": "name",
+          "contains": "Guardian"
+        }
+      ]
+    },
+    {
+      "id": "stake",
+      "target": "WEAPON",
+      "label": "Stake",
+      "all": [
+        {
+          "field": "dimension",
+          "equals": "dungeons:dungeon"
+        },
+        {
+          "field": "kind",
+          "equals": "ENTITY"
+        },
+        {
+          "field": "registry_id",
+          "equals": "minecraft:armor_stand"
+        },
+        {
+          "field": "name",
+          "suffix": "_stake"
+        }
+      ]
+    },
+    {
+      "id": "alpha",
+      "target": "STRONG_POKEMON",
+      "label": "Alpha {observation.species} Lv.{observation.level}",
+      "all": [
+        {
+          "field": "dimension",
+          "equals": "dungeons:dungeon"
+        },
+        {
+          "field": "kind",
+          "equals": "POKEMON"
+        },
+        {
+          "field": "wild",
+          "equals": true
+        },
+        {
+          "field": "aspects",
+          "token": "alpha"
+        }
+      ]
+    },
+    {
+      "id": "high-level",
+      "target": "STRONG_POKEMON",
+      "label": "{observation.species} Lv.{observation.level}",
+      "all": [
+        {
+          "field": "dimension",
+          "equals": "dungeons:dungeon"
+        },
+        {
+          "field": "kind",
+          "equals": "POKEMON"
+        },
+        {
+          "field": "wild",
+          "equals": true
+        },
+        {
+          "field": "level",
+          "min": 80
+        }
+      ]
+    }
+  ]
+}

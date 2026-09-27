@@ -1,0 +1,16 @@
+{
+  "minecraft": "1.21.1",
+  "java": 21,
+  "meteor": {
+    "coordinate": "meteordevelopment:meteor-client:0.5.8",
+    "url": "https://maven.meteordev.org/releases/meteordevelopment/meteor-client/0.5.8/meteor-client-0.5.8.jar",
+    "sha256": "090ad8f02273a67eca753ef37ccee2256e4dd3d715501ed75433ec8f57d7c5e9",
+    "modified": false
+  },
+  "addon_template": {
+    "repository": "https://github.com/MeteorDevelopment/meteor-addon-template",
+    "reference_commit": "7977a462191e5dc14075e076fe2c23e192e34e82",
+    "note": "Adapted addon entrypoint/build contract for two independent 1.21.1 Gradle roots; no template example features."
+  },
+  "cobblemon": {"required_by": "kru-cobblemon", "note": "Runtime ABI must be tested for the intended Cobblemon build; no Academy dependency."}
+}

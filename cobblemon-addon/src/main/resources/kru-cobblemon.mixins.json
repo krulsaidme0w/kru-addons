@@ -1,0 +1,7 @@
+{
+  "required": false,
+  "package": "dev.krul.cobblemon.mixin",
+  "compatibilityLevel": "JAVA_21",
+  "client": ["OverlayRenderMixin", "OverlayMouseMixin", "OverlayKeyboardMixin"],
+  "injectors": {"defaultRequire": 0}
+}
