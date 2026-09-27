@@ -38,6 +38,7 @@ public final class BuilderController implements AutoCloseable {
     private CompletableFuture<?> pendingCapture;
     private AttachmentPolicy.RequestLease requestLease;
     private long generation;
+    private PendingStart pendingStart;
     private UUID world;
     private UUID automaticScreenshot;
     private boolean closed, collapsed, settingsExpanded, nonAtomicSave;
@@ -97,7 +98,7 @@ public final class BuilderController implements AutoCloseable {
         if (session == null) { status = "Select an area and complete a fresh scan first"; return; }
         removeAutomaticScreenshot();
         prepared = null;
-        long run = ++generation;
+        long run = advanceGeneration();
         phase = BuilderUiState.Phase.PREPARING;
         status = "Refreshing a bounded world snapshot locally — nothing has been sent";
         try {
@@ -154,7 +155,7 @@ public final class BuilderController implements AutoCloseable {
         }
         BuilderUiState.Prepared review = prepared;
         WorldSnapshot reviewedSnapshot = preparedSnapshot;
-        long check = ++generation;
+        long check = advanceGeneration();
         phase = BuilderUiState.Phase.PREPARING;
         status = "Rechecking the reviewed snapshot before transmission";
         snapshots.fresh().whenComplete((now, failure) -> clientExecutor.execute(() -> {
@@ -185,7 +186,9 @@ public final class BuilderController implements AutoCloseable {
             now, paths, accepted);
         requestLease = attachments.retainForRequest();
         turnFinished = new CompletableFuture<>();
-        long run = ++generation;
+        long run = advanceGeneration();
+        PendingStart dispatch = new PendingStart();
+        pendingStart = dispatch;
         activeTurn = true; turnAcceptedRevision = accepted.map(BuildPlan::revision).orElse(-1L);
         prepared = null; preparedSnapshot = null; phase = BuilderUiState.Phase.WAITING;
         status = "Sending reviewed request to Codex";
@@ -193,7 +196,7 @@ public final class BuilderController implements AutoCloseable {
         try {
             AgentClient requestAgent = agent;
             ioExecutor.execute(() -> {
-                try { requestAgent.start(request, event -> clientExecutor.execute(() -> onAgentEvent(run, event))); }
+                try { dispatch.run(() -> requestAgent.start(request, event -> clientExecutor.execute(() -> onAgentEvent(run, event)))); }
                 catch (RuntimeException failure) { clientExecutor.execute(() -> onAgentEvent(run, new AgentEvent.Failed(safeMessage(failure)))); }
             });
             requestLease.releaseWhen(turnFinished);
@@ -238,12 +241,12 @@ public final class BuilderController implements AutoCloseable {
     }
 
     private void finishTurn(BuilderUiState.Phase next, String message) {
-        activeTurn = false; phase = next; status = message; turnFinished.complete(null); ++generation;
+        activeTurn = false; phase = next; status = message; turnFinished.complete(null); advanceGeneration();
     }
 
     public void cancel() {
         if (closed) return;
-        ++generation;
+        advanceGeneration();
         if (pendingCapture != null) pendingCapture.cancel(true);
         pendingCapture = null; prepared = null; preparedSnapshot = null;
         if (activeTurn) { AgentClient cancelAgent = agent; ioExecutor.execute(cancelAgent::cancel); activeTurn = false; turnFinished.complete(null); }
@@ -283,7 +286,7 @@ public final class BuilderController implements AutoCloseable {
 
     public void reject() {
         if (closed) return;
-        ++generation;
+        advanceGeneration();
         if (activeTurn) { AgentClient cancelAgent = agent; ioExecutor.execute(cancelAgent::cancel); activeTurn = false; turnFinished.complete(null); }
         ProjectSession session = sessions.get(); if (session != null) session.cancelRequest();
         prepared = null; preparedSnapshot = null;
@@ -295,7 +298,7 @@ public final class BuilderController implements AutoCloseable {
 
     private void invalidateContext(boolean resetWorld, String reason) {
         if (closed) return;
-        ++generation;
+        advanceGeneration();
         if (resetWorld) { world = null; conversation.clear(); }
         snapshot = Optional.empty(); prepared = null; preparedSnapshot = null; thumbnails.clear();
         attachments.draft().forEach(attachment -> { removedAttachments.add(attachment.id()); ioExecutor.execute(() -> attachments.remove(attachment.id())); });
@@ -315,14 +318,12 @@ public final class BuilderController implements AutoCloseable {
     public void login() {
         if (closed) return;
         if (!cloudConsent) { status = "Grant session consent before connecting to Codex"; return; }
-        long run = ++generation; phase = BuilderUiState.Phase.WAITING; status = "Opening official Codex sign-in";
+        long run = advanceGeneration(); phase = BuilderUiState.Phase.WAITING; status = "Opening official Codex sign-in";
+        PendingStart dispatch = new PendingStart();
+        pendingStart = dispatch;
         AgentClient loginAgent = agent;
-        ioExecutor.execute(() -> {
-            if (closed || !cloudConsent || run != generation) return;
-            loginAgent.login(event -> clientExecutor.execute(() -> {
-                if (cloudConsent) onAgentEvent(run, event);
-            }));
-        });
+        ioExecutor.execute(() -> dispatch.run(() ->
+            loginAgent.login(event -> clientExecutor.execute(() -> onAgentEvent(run, event)))));
     }
 
     public void reconnect() { if (!closed) login(); }
@@ -330,7 +331,7 @@ public final class BuilderController implements AutoCloseable {
         if (closed || cloudConsent == consent) return;
         cloudConsent = consent;
         if (!consent) {
-            ++generation;
+            advanceGeneration();
             if (phase == BuilderUiState.Phase.WAITING && !activeTurn) {
                 AgentClient pendingAgent = agent;
                 ioExecutor.execute(pendingAgent::cancel);
@@ -349,7 +350,7 @@ public final class BuilderController implements AutoCloseable {
     }
     public void replaceAgent(AgentClient replacement) {
         ensureOpen();
-        ++generation;
+        advanceGeneration();
         AgentClient old = agent;
         if (activeTurn) { ioExecutor.execute(old::cancel); turnFinished.complete(null); }
         activeTurn = false; prepared = null;
@@ -481,7 +482,7 @@ public final class BuilderController implements AutoCloseable {
         return session == null ? -1L : session.accepted().map(BuildPlan::revision).orElse(-1L);
     }
     private void invalidateTurn(String message) {
-        ++generation;
+        advanceGeneration();
         if (activeTurn) { AgentClient staleAgent = agent; ioExecutor.execute(staleAgent::cancel); activeTurn = false; turnFinished.complete(null); }
         phase = agent.status().connection() == AgentClient.Connection.READY
             && agent.status().login() == AgentClient.Login.AUTHENTICATED ? BuilderUiState.Phase.READY : BuilderUiState.Phase.DISCONNECTED;
@@ -493,6 +494,21 @@ public final class BuilderController implements AutoCloseable {
     }
     public void showNotice(String message) { if (!closed) status = Objects.requireNonNull(message); }
     private boolean current(long run) { return !closed && run == generation; }
+    private long advanceGeneration() {
+        if (pendingStart != null) { pendingStart.cancel(); pendingStart = null; }
+        return ++generation;
+    }
+
+    /** Serializes cancellation with the agent invocation, including the check-to-call boundary. */
+    private static final class PendingStart {
+        private boolean consumed;
+        synchronized void cancel() { consumed = true; }
+        synchronized void run(Runnable action) {
+            if (consumed) return;
+            consumed = true;
+            action.run();
+        }
+    }
     private void ensureOpen() { if (closed) throw new IllegalStateException("Builder controller is closed"); }
     private static String safeMessage(Throwable failure) {
         Throwable cause = failure; while (cause.getCause() != null) cause = cause.getCause();
@@ -500,7 +516,7 @@ public final class BuilderController implements AutoCloseable {
     }
     @Override public void close() {
         if (closed) return;
-        closed = true; ++generation;
+        closed = true; advanceGeneration();
         if (pendingCapture != null) pendingCapture.cancel(true);
         pendingCapture = null;
         AgentClient closing = agent;

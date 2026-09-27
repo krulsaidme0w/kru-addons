@@ -301,6 +301,70 @@ class BuilderControllerTest {
         fixture.close();
     }
 
+    @Test void queuedSendCannotStartAfterRevocationOrCancellation() {
+        for (boolean revoke : List.of(true, false)) {
+            var io = new QueuedExecutor();
+            var fixture = new Fixture(io);
+            fixture.controller.setCloudConsent(true);
+            fixture.controller.send("queued request");
+            fixture.capture.complete(fixture.capturePath());
+            io.drain();
+            fixture.controller.confirmSend();
+            assertEquals(0, fixture.agent.starts);
+            if (revoke) {
+                fixture.controller.setCloudConsent(false);
+                fixture.controller.setCloudConsent(true);
+            } else fixture.controller.cancel();
+            io.drain();
+            assertEquals(0, fixture.agent.starts);
+            fixture.close();
+            io.drain();
+        }
+    }
+
+    @Test void queuedSendStartsNormallyWhenStillAuthorized() {
+        var io = new QueuedExecutor();
+        var fixture = new Fixture(io);
+        fixture.controller.setCloudConsent(true);
+        fixture.controller.send("queued request");
+        fixture.capture.complete(fixture.capturePath());
+        io.drain();
+        fixture.controller.confirmSend();
+        assertEquals(0, fixture.agent.starts);
+        io.drain();
+        assertEquals(1, fixture.agent.starts);
+        assertEquals("queued request", fixture.agent.request.text());
+        fixture.close();
+        io.drain();
+    }
+
+    @Test void queuedLoginAndReconnectAreInvalidatedButFreshLoginStillWorks() {
+        for (boolean revoke : List.of(true, false)) {
+            var io = new QueuedExecutor();
+            var fixture = new Fixture(io);
+            fixture.controller.setCloudConsent(true);
+            fixture.controller.login();
+            fixture.controller.reconnect();
+            if (revoke) {
+                fixture.controller.setCloudConsent(false);
+                fixture.controller.setCloudConsent(true);
+            } else fixture.controller.cancel();
+            io.drain();
+            assertEquals(0, fixture.agent.logins);
+            fixture.controller.reconnect();
+            io.drain();
+            assertEquals(1, fixture.agent.logins);
+            fixture.close();
+            io.drain();
+        }
+    }
+
+    private static final class QueuedExecutor implements Executor {
+        private final Deque<Runnable> tasks = new ArrayDeque<>();
+        public void execute(Runnable task) { tasks.addLast(task); }
+        void drain() { while (!tasks.isEmpty()) tasks.removeFirst().run(); }
+    }
+
     private final class Fixture {
         final UUID world = UUID.randomUUID();
         final Bounds bounds = new Bounds(new Cell(0, 0, 0), new Cell(0, 0, 0));
@@ -313,12 +377,13 @@ class BuilderControllerTest {
         CompletableFuture<Path> capture = new CompletableFuture<>();
         final AttachmentPolicy attachments;
         final BuilderController controller;
-        Fixture() {
+        Fixture() { this(Runnable::run); }
+        Fixture(Executor ioExecutor) {
             try { attachments = new AttachmentPolicy(temp.resolve(UUID.randomUUID().toString())); }
             catch (Exception e) { throw new RuntimeException(e); }
             controller = new BuilderController(PROJECT, "codex", () -> snapshotSource.get(), () -> session, agent,
                 () -> capture, attachments, new ProjectStore(temp.resolve("projects")), Runnable::run,
-                Runnable::run, ignored -> {});
+                ioExecutor, ignored -> {});
         }
         WorldSnapshot snapshot(long revision) { return new WorldSnapshot(world, revision, bounds, Map.of(bounds.min(), AIR), Set.of()); }
         CompletableFuture<WorldSnapshot> fresh() { return CompletableFuture.completedFuture(scans.isEmpty() ? latest : scans.removeFirst()); }
