@@ -326,7 +326,7 @@ self.assertEqual(("builder-addon", "0.1.0-alpha.1"),
 - [x] Document runtime setup, local-vs-cloud disclosure, exact limits, unavailable
   states, privacy controls, native-OS CLI requirement, experimental status and no
   server permissions/world edits. Mark incomplete live checks honestly.
-- [ ] Run all three Gradle builds, distribution tests, builder packaging, diff check,
+- [x] Run all three Gradle builds, distribution tests, builder packaging, diff check,
   workflow lint and private-path/secret scan of changed files. Inspect actual JAR
   contents and metadata. Require independent code review before integration.
 - [x] Commit `build: package and verify independent KRU Builder addon`. Report tests
@@ -339,6 +339,15 @@ check, changed-file private-path/token scan, and actionlint 1.7.7 passed. The
 controller verified the official archive SHA256 before running actionlint. No
 live runtime checks were performed, and the checklist below remains unchecked
 until tested in Minecraft.
+
+Final verification: independent task and final-fix reviews passed. Builder's
+fresh full build passed 137 tests with no failures, errors or skips; distribution
+passed 19 tests. The other addons passed their existing suites (Cobblemon: 593
+tests, including 17 pre-existing ABI skips; Tools: 9 tests). The repackaged Builder
+JAR passed addon-boundary, ZIP-integrity and SHA256 checks. Work remains on
+`feat/builder-agent`; no installation, main merge, push, release publication,
+real Codex login or model request was performed. Live checks remain pending in
+`docs/builder-runtime-checklist.md`.
 
 ## Self-review and checkpoints
 
