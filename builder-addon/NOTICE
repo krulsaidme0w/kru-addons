@@ -1,0 +1,9 @@
+KRU Builder
+Copyright (C) 2026 krul and contributors
+Licensed under GPL-3.0-or-later; see LICENSE.
+
+Meteor Client 0.5.8 is an official external dependency. No Meteor classes
+are bundled or modified. This addon contains no sibling-addon feature sources.
+
+Gradle wrapper files retain their original authors' Apache-2.0 notices.
+See THIRD_PARTY.md for build provenance.

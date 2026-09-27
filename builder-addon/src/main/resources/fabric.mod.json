@@ -1,0 +1,13 @@
+{
+  "schemaVersion": 1,
+  "id": "kru-builder",
+  "version": "${version}",
+  "name": "KRU Builder",
+  "description": "Independent client-only Meteor collaborative building addon foundation.",
+  "authors": ["krul"],
+  "license": "GPL-3.0-or-later",
+  "environment": "client",
+  "entrypoints": {"meteor": ["dev.krul.builder.BuilderAddon"]},
+  "depends": {"minecraft": "1.21.1", "java": ">=21", "fabricloader": ">=0.16.14", "meteor-client": "0.5.8"},
+  "custom": {"meteor-client:color": "145,61,226"}
+}
