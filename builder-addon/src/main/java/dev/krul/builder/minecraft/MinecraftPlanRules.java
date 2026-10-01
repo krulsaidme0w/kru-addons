@@ -19,6 +19,14 @@ public final class MinecraftPlanRules implements PlanValidator.StateRules {
 
     @Override public boolean test(StateKey state) { return resolve(state).isPresent(); }
 
+    public boolean isAirState(StateKey key) { return resolve(key).map(BlockState::isAir).orElse(false); }
+
+    /** Unknown states and unsupported block-entity states both fail closed. */
+    public boolean hasUnsupportedBlockEntity(StateKey key) {
+        return resolve(key).map(state -> state.hasBlockEntity()
+            && !(state.getBlock().getClass() == BedBlock.class && key.id().startsWith("minecraft:"))).orElse(true);
+    }
+
     private Optional<BlockState> resolve(StateKey key) {
         var id = Identifier.of(key.id());
         // A defaulted registry's get alone would silently turn an unknown ID into air.

@@ -1,7 +1,9 @@
 package dev.krul.builder.mcp;
 
 import com.google.gson.Gson;
+import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
+import com.google.gson.JsonParser;
 
 import java.net.URI;
 import java.net.http.*;
@@ -17,6 +19,7 @@ public final class BridgeClient {
     public static final int MAX_PAGE_SIZE = 1024;
     public static final int MAX_CATALOG_PAGE = 10_000;
     public static final int MAX_IMAGE_BYTES = 8 * 1024 * 1024;
+    public static final int MAX_PLAN_BYTES = 16 * 1024 * 1024;
     private static final Gson GSON = new Gson();
     private final URI baseUri;
     private final HttpClient http;
@@ -31,6 +34,7 @@ public final class BridgeClient {
     public record BridgeReply(boolean ok, long worldGeneration, long snapshotRevision, String message, String payload) {}
     public record CaptureReply(long worldGeneration, long snapshotRevision, byte[] png) {}
     public record BlockDescription(BridgeReply metadata, byte[] png) {}
+    public record PlanInspection(BridgeReply metadata, byte[] previewPng) {}
     public record PairResult(String state, String message) {}
     private record WireResponse(int version, String id, boolean ok, long worldGeneration, long snapshotRevision,
                                 String message, String payload, String imageBase64) {}
@@ -83,6 +87,34 @@ public final class BridgeClient {
         return call("/v1/selection", "READ_SELECTION", bounds, page, pageSize, worldGeneration, snapshotRevision);
     }
 
+    /** Collects the exact selected snapshot for the private plan viewer/archive, never the MCP tool context. */
+    public String readSelectionSnapshot(Bounds bounds, long worldGeneration, long snapshotRevision) {
+        Objects.requireNonNull(bounds);
+        long volume = Math.multiplyExact(Math.multiplyExact((long) bounds.max().x() - bounds.min().x() + 1,
+            (long) bounds.max().y() - bounds.min().y() + 1), (long) bounds.max().z() - bounds.min().z() + 1);
+        if (volume < 1 || volume > 32_768 || worldGeneration < 1 || snapshotRevision < 1)
+            throw new IllegalArgumentException("Snapshot bounds or identity exceed limit");
+        int pageSize = MAX_PAGE_SIZE, pages = Math.toIntExact((volume + pageSize - 1) / pageSize);
+        JsonObject result = new JsonObject(); result.add("min", coordinate(bounds.min())); result.add("max", coordinate(bounds.max()));
+        JsonArray cells = new JsonArray();
+        for (int page = 0; page < pages; page++) {
+            BridgeReply reply = readSelection(bounds, page, pageSize, worldGeneration, snapshotRevision);
+            if (!reply.ok()) throw new BridgeException(reply.message());
+            if (reply.worldGeneration() != worldGeneration || reply.snapshotRevision() != snapshotRevision)
+                throw new BridgeException("World snapshot changed while archiving the region");
+            JsonObject payload = JsonParser.parseString(reply.payload()).getAsJsonObject();
+            if (payload.get("snapshotRevision").getAsLong() != snapshotRevision
+                || payload.getAsJsonArray("cells").size() != Math.min(pageSize, volume - (long) page * pageSize))
+                throw new BridgeException("Incomplete snapshot page received from Minecraft");
+            payload.getAsJsonArray("cells").forEach(cells::add);
+        }
+        result.addProperty("snapshotRevision", snapshotRevision); result.addProperty("total", volume); result.add("cells", cells);
+        String json = GSON.toJson(result);
+        if (json.getBytes(StandardCharsets.UTF_8).length > 32 * 1024 * 1024)
+            throw new BridgeException("Selected snapshot exceeds the local archive limit");
+        return json;
+    }
+
     public CaptureReply captureView(long worldGeneration, long snapshotRevision) {
         WireResponse response = wire(callRequest("/v1/capture", "CAPTURE_VIEW", null, 0, 0, worldGeneration, snapshotRevision));
         if (!response.ok()) throw new BridgeException(response.message());
@@ -92,6 +124,38 @@ public final class BridgeClient {
             validatePng(png);
             return new CaptureReply(response.worldGeneration(), response.snapshotRevision(), png);
         } catch (IllegalArgumentException invalid) { throw new BridgeException("Bridge returned an invalid image", invalid); }
+    }
+
+    public PlanInspection inspectPlan(String contractJson, long worldGeneration, long snapshotRevision) {
+        if (contractJson == null || contractJson.getBytes(StandardCharsets.UTF_8).length > MAX_PLAN_BYTES
+            || worldGeneration < 1 || snapshotRevision < 1) throw new IllegalArgumentException("Invalid plan or snapshot identity");
+        WireResponse response = wire(callRequest("/v1/plans/inspect", "INSPECT_PLAN", null, 0, 0,
+            worldGeneration, snapshotRevision, null, null, null, contractJson, null));
+        if (!response.ok()) throw new BridgeException(response.message());
+        byte[] png = null;
+        if (response.imageBase64() != null) {
+            try { png = Base64.getDecoder().decode(response.imageBase64()); validatePng(png); }
+            catch (IllegalArgumentException invalid) { throw new BridgeException("Bridge returned an invalid plan preview", invalid); }
+        }
+        return new PlanInspection(new BridgeReply(true, response.worldGeneration(), response.snapshotRevision(),
+            response.message(), response.payload()), png);
+    }
+
+    public BridgeReply publishPlan(String validationToken, long worldGeneration, long snapshotRevision) {
+        if (validationToken == null || validationToken.length() > 128 || worldGeneration < 1 || snapshotRevision < 1)
+            throw new IllegalArgumentException("Invalid plan validation token or snapshot identity");
+        return simplePlanCall("/v1/plans/publish", "PUBLISH_PLAN", worldGeneration, snapshotRevision, null, validationToken);
+    }
+
+    public BridgeReply planStatus(long worldGeneration, long snapshotRevision) {
+        return simplePlanCall("/v1/plans/status", "PLAN_STATUS", worldGeneration, snapshotRevision, null, null);
+    }
+
+    private BridgeReply simplePlanCall(String path, String method, long generation, long revision, String payload, String validationToken) {
+        WireResponse response = wire(callRequest(path, method, null, 0, 0, generation, revision,
+            null, null, null, payload, validationToken));
+        if (!response.ok()) throw new BridgeException(response.message());
+        return new BridgeReply(true, response.worldGeneration(), response.snapshotRevision(), response.message(), response.payload());
     }
 
     /** Starts pairing once, then waits only on this local MCP process for the explicit in-game decision. */
@@ -137,6 +201,10 @@ public final class BridgeClient {
     }
     private HttpRequest callRequest(String path, String method, Bounds bounds, int page, int pageSize, long generation, long revision,
                                     String query, String namespace, String blockId) {
+        return callRequest(path, method, bounds, page, pageSize, generation, revision, query, namespace, blockId, null, null);
+    }
+    private HttpRequest callRequest(String path, String method, Bounds bounds, int page, int pageSize, long generation, long revision,
+                                    String query, String namespace, String blockId, String payload, String validationToken) {
         String auth = token;
         if (auth == null) throw new BridgeException("Pair this MCP companion with Minecraft first");
         JsonObject json = new JsonObject(); json.addProperty("version", PROTOCOL_VERSION); json.addProperty("id", "mcp-" + Long.toUnsignedString(System.nanoTime()));
@@ -144,8 +212,13 @@ public final class BridgeClient {
         json.addProperty("expectedWorldGeneration", generation); json.addProperty("expectedSnapshotRevision", revision); json.add("token", com.google.gson.JsonNull.INSTANCE);
         if (query != null) json.addProperty("query", query); if (namespace != null) json.addProperty("namespace", namespace);
         if (blockId != null) json.addProperty("blockId", blockId);
+        if (payload != null) json.addProperty("payload", payload);
+        if (validationToken != null) json.addProperty("validationToken", validationToken);
+        String body = json.toString();
+        if (body.getBytes(StandardCharsets.UTF_8).length > MAX_PLAN_BYTES * 2 + 4096)
+            throw new BridgeException("Plan request exceeds size limit");
         return HttpRequest.newBuilder(uri(path)).timeout(timeout).header("Authorization", "Bearer " + auth)
-            .header("Content-Type", "application/json").POST(HttpRequest.BodyPublishers.ofString(json.toString(), StandardCharsets.UTF_8)).build();
+            .header("Content-Type", "application/json").POST(HttpRequest.BodyPublishers.ofString(body, StandardCharsets.UTF_8)).build();
     }
 
     private WireResponse wire(HttpRequest request) {
@@ -177,6 +250,9 @@ public final class BridgeClient {
     }
 
     private URI uri(String path) { return URI.create(baseUri.toString().replaceAll("/$", "") + path); }
+    private static JsonObject coordinate(Coordinate value) {
+        JsonObject json = new JsonObject(); json.addProperty("x", value.x()); json.addProperty("y", value.y()); json.addProperty("z", value.z()); return json;
+    }
     private static URI validateBase(URI uri) {
         String host = uri.getHost();
         if (!"http".equalsIgnoreCase(uri.getScheme()) || host == null || !(host.equals("127.0.0.1") || host.equals("localhost") || host.equals("[::1]"))

@@ -8,6 +8,8 @@ import dev.krul.builder.catalog.BlockCatalogSnapshotCodec;
 import dev.krul.builder.catalog.BlockCatalogStore;
 import dev.krul.builder.model.Bounds;
 import dev.krul.builder.model.WorldSnapshot;
+import dev.krul.builder.project.*;
+import dev.krul.builder.blueprint.PlanPreviewModel;
 import net.minecraft.client.MinecraftClient;
 
 import java.io.IOException;
@@ -19,6 +21,7 @@ import java.util.Optional;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.*;
+import java.util.UUID;
 
 /** Serves cached scan evidence and explicit framebuffer captures without doing Minecraft work on HTTP threads. */
 public final class BuilderBridgeDataSource implements BridgeDataSource {
@@ -36,6 +39,15 @@ public final class BuilderBridgeDataSource implements BridgeDataSource {
     private final BlockCatalogStore catalogStore;
     private volatile String persistedCatalogFingerprint;
     private final java.util.concurrent.atomic.AtomicLong catalogSaveGeneration = new java.util.concurrent.atomic.AtomicLong();
+    private final Supplier<UUID> conversation;
+    private final Consumer<BuildPlan> publishPreview;
+    private final PlanPreviewRenderer planPreviews;
+    private final PlanContractCodec planCodec = new PlanContractCodec();
+    private PendingPlan pendingPlan;
+    private PendingPlan publishedPlan;
+
+    private record PendingPlan(String token, PlanContract contract, BuildPlan preview, UUID conversation,
+                               long generation, long revision) {}
 
     public BuilderBridgeDataSource(MinecraftClient client, Supplier<Optional<WorldSnapshot>> snapshots,
                                    Supplier<Optional<Bounds>> selection, LongSupplier worldGeneration,
@@ -47,16 +59,108 @@ public final class BuilderBridgeDataSource implements BridgeDataSource {
         this.blockCatalog = new ClientBlockCatalog(client);
         this.blockPreviews = new BlockPreviewRenderer(client);
         this.catalogStore = null;
+        this.conversation = () -> new UUID(0, 0); this.publishPreview = ignored -> {};
+        this.planPreviews = new PlanPreviewRenderer(client);
     }
 
     public BuilderBridgeDataSource(MinecraftClient client, Supplier<Optional<WorldSnapshot>> snapshots,
                                    Supplier<Optional<Bounds>> selection, LongSupplier worldGeneration,
                                    Supplier<String> worldIdentity, WorldCapture capture, Executor io, Path builderDirectory) {
+        this(client, snapshots, selection, worldGeneration, worldIdentity, capture, io, builderDirectory,
+            () -> new UUID(0, 0), ignored -> {});
+    }
+
+    public BuilderBridgeDataSource(MinecraftClient client, Supplier<Optional<WorldSnapshot>> snapshots,
+                                   Supplier<Optional<Bounds>> selection, LongSupplier worldGeneration,
+                                   Supplier<String> worldIdentity, WorldCapture capture, Executor io, Path builderDirectory,
+                                   Supplier<UUID> conversation, Consumer<BuildPlan> publishPreview) {
         this.client = Objects.requireNonNull(client); this.snapshots = Objects.requireNonNull(snapshots);
         this.selection = Objects.requireNonNull(selection); this.worldGeneration = Objects.requireNonNull(worldGeneration);
         this.worldIdentity = Objects.requireNonNull(worldIdentity); this.capture = Objects.requireNonNull(capture);
         this.io = Objects.requireNonNull(io); this.blockCatalog = new ClientBlockCatalog(client);
         this.blockPreviews = new BlockPreviewRenderer(client); this.catalogStore = new BlockCatalogStore(builderDirectory);
+        this.conversation = Objects.requireNonNull(conversation); this.publishPreview = Objects.requireNonNull(publishPreview);
+        this.planPreviews = new PlanPreviewRenderer(client);
+    }
+
+    @Override public CompletionStage<BridgeProtocol.Response> inspectPlan(BridgeProtocol.Request request) {
+        return onClient(request, generation -> {
+            WorldSnapshot snapshot = snapshots.get().orElseThrow(() -> new IllegalStateException("No complete scan is available"));
+            Bounds bounds = selection.get().orElseThrow(() -> new IllegalStateException("Select and scan a region first"));
+            checkExactExpected(request, generation, snapshot.revision());
+            BridgeRequestValidator.validateSelection(bounds, snapshot.bounds(), 32_768);
+            PlanContract contract = planCodec.decode(request.payload());
+            var validator = new PlanPreconditionValidator(new MinecraftPlanRules()::test,
+                new MinecraftPlanRules()::isAirState, new MinecraftPlanRules()::hasUnsupportedBlockEntity);
+            var result = validator.validate(contract, snapshot, conversation.get());
+            JsonObject payload = new JsonObject(); payload.addProperty("valid", result.valid());
+            payload.addProperty("planId", contract.id().toString()); payload.addProperty("planRevision", contract.revision());
+            payload.addProperty("places", result.placeCount()); payload.addProperty("replacements", result.replaceCount());
+            payload.addProperty("removals", result.removeCount());
+            payload.addProperty("diagnosticCount", result.diagnostics().size());
+            var diagnostics = new com.google.gson.JsonArray();
+            for (var diagnostic : result.diagnostics().stream().limit(100).toList()) {
+                JsonObject item = new JsonObject(); item.addProperty("code", diagnostic.code());
+                item.addProperty("message", diagnostic.message());
+                if (diagnostic.relative() != null) item.add("position", coordinate(diagnostic.relative().x(), diagnostic.relative().y(), diagnostic.relative().z()));
+                diagnostics.add(item);
+            }
+            payload.add("diagnostics", diagnostics);
+            if (result.diagnostics().size() > 100) payload.addProperty("omittedDiagnostics", result.diagnostics().size() - 100);
+            if (!result.valid()) { pendingPlan = null; return ok(request, generation, snapshot.revision(), payload.toString(), null); }
+            BuildPlan preview = result.previewPlan().orElseThrow();
+            String token = UUID.randomUUID().toString();
+            byte[] png;
+            try {
+                png = planPreviews.renderNow(PlanPreviewModel.project(preview, bounds),
+                    () -> worldGeneration.getAsLong() == generation && scansRevision() == snapshot.revision());
+            } catch (IOException unavailable) {
+                pendingPlan = null;
+                throw new IllegalStateException("Plan is valid, but schematic preview could not be rendered: " + unavailable.getMessage(), unavailable);
+            }
+            pendingPlan = new PendingPlan(token, contract, preview, conversation.get(), generation, snapshot.revision());
+            payload.addProperty("validationToken", token);
+            return ok(request, generation, snapshot.revision(), payload.toString(), Base64.getEncoder().encodeToString(png));
+        });
+    }
+
+    @Override public CompletionStage<BridgeProtocol.Response> publishPlan(BridgeProtocol.Request request) {
+        return onClient(request, generation -> {
+            WorldSnapshot snapshot = snapshots.get().orElseThrow(() -> new IllegalStateException("No complete scan is available"));
+            checkExactExpected(request, generation, snapshot.revision());
+            PendingPlan pending = pendingPlan;
+            if (pending == null || request.validationToken() == null || !pending.token().equals(request.validationToken()))
+                throw new IllegalStateException("No matching validated plan; inspect it again");
+            if (pending.generation() != generation || pending.revision() != snapshot.revision()
+                || !pending.conversation().equals(conversation.get())) {
+                pendingPlan = null; throw new IllegalStateException("Validated plan is stale; inspect the current snapshot again");
+            }
+            publishPreview.accept(pending.preview());
+            pendingPlan = null;
+            publishedPlan = pending;
+            JsonObject payload = new JsonObject(); payload.addProperty("published", true);
+            payload.addProperty("planId", pending.contract().id().toString()); payload.addProperty("planRevision", pending.contract().revision());
+            payload.addProperty("worldMutation", false);
+            return ok(request, generation, snapshot.revision(), payload.toString(), null);
+        });
+    }
+
+    @Override public CompletionStage<BridgeProtocol.Response> planStatus(BridgeProtocol.Request request) {
+        return onClient(request, generation -> {
+            WorldSnapshot snapshot = snapshots.get().orElse(null); long revision = snapshot == null ? 0 : snapshot.revision();
+            if (pendingPlan != null && !current(pendingPlan, generation, revision)) pendingPlan = null;
+            if (publishedPlan != null && !current(publishedPlan, generation, revision)) publishedPlan = null;
+            PendingPlan candidate = pendingPlan != null ? pendingPlan : publishedPlan;
+            boolean valid = candidate != null;
+            JsonObject payload = new JsonObject();
+            payload.addProperty("state", !valid ? "NONE_OR_STALE" : candidate == publishedPlan ? "PUBLISHED_PREVIEW_ONLY" : "VALIDATED_PREVIEW_ONLY");
+            if (valid) { payload.addProperty("planId", candidate.contract().id().toString()); payload.addProperty("planRevision", candidate.contract().revision()); }
+            return ok(request, generation, revision, payload.toString(), null);
+        });
+    }
+
+    private boolean current(PendingPlan plan, long generation, long revision) {
+        return plan.generation() == generation && plan.revision() == revision && plan.conversation().equals(conversation.get());
     }
 
     @Override public CompletionStage<BridgeProtocol.Response> status(BridgeProtocol.Request request) {
@@ -221,6 +325,12 @@ public final class BuilderBridgeDataSource implements BridgeDataSource {
             throw new IllegalStateException("World generation changed; read status again");
         if (request.expectedSnapshotRevision() > 0 && request.expectedSnapshotRevision() != revision)
             throw new IllegalStateException("Snapshot is stale; read status and selection again");
+    }
+
+    private void checkExactExpected(BridgeProtocol.Request request, long generation, long revision) {
+        if (request.expectedWorldGeneration() < 1 || request.expectedSnapshotRevision() < 1
+            || request.expectedWorldGeneration() != generation || request.expectedSnapshotRevision() != revision)
+            throw new IllegalStateException("World or snapshot identity is stale; read status and selection again");
     }
 
     private static BridgeProtocol.Response ok(BridgeProtocol.Request request, long generation, long revision, String payload, String image) {

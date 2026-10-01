@@ -11,19 +11,20 @@ import java.util.Set;
 /** Small, versioned JSON contract shared with the local MCP companion. */
 public final class BridgeProtocol {
     public static final int VERSION = 1;
-    public static final int MAX_JSON_BYTES = 256 * 1024;
+    public static final int MAX_JSON_BYTES = 32 * 1024 * 1024;
     private static final Gson GSON = new Gson();
     private BridgeProtocol() {}
 
-    public enum Method { STATUS, READ_SELECTION, CAPTURE_VIEW, LIST_BLOCK_MODS, SEARCH_BLOCKS, DESCRIBE_BLOCK, PAIR }
+    public enum Method { STATUS, READ_SELECTION, CAPTURE_VIEW, LIST_BLOCK_MODS, SEARCH_BLOCKS, DESCRIBE_BLOCK,
+        INSPECT_PLAN, PUBLISH_PLAN, PLAN_STATUS, PAIR }
 
     public record Request(int version, String id, Method method, Bounds bounds, int page, int pageSize,
                           long expectedWorldGeneration, long expectedSnapshotRevision, String query,
-                          String namespace, String blockId, String token) {
+                          String namespace, String blockId, String payload, String validationToken, String token) {
         public Request(int version, String id, Method method, Bounds bounds, int page, int pageSize,
                        long expectedWorldGeneration, long expectedSnapshotRevision, String token) {
             this(version, id, method, bounds, page, pageSize, expectedWorldGeneration, expectedSnapshotRevision,
-                null, null, null, token);
+                null, null, null, null, null, token);
         }
     }
 
@@ -39,7 +40,8 @@ public final class BridgeProtocol {
         try {
             JsonObject object = JsonParser.parseString(json).getAsJsonObject();
             fields(object, Set.of("version", "id", "method", "bounds", "page", "pageSize",
-                "expectedWorldGeneration", "expectedSnapshotRevision", "query", "namespace", "blockId", "token"));
+                "expectedWorldGeneration", "expectedSnapshotRevision", "query", "namespace", "blockId",
+                "payload", "validationToken", "token"));
             Request request = GSON.fromJson(object, Request.class);
             if (request.version() != VERSION) throw new IllegalArgumentException("Unsupported bridge protocol version");
             if (request.id() == null || request.id().isBlank() || request.id().length() > 128 || request.method() == null

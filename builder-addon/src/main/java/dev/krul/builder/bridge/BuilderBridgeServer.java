@@ -44,6 +44,9 @@ public final class BuilderBridgeServer implements AutoCloseable {
         route("/v1/catalog/mods", exchange -> authenticated(exchange, source, BridgeProtocol.Method.LIST_BLOCK_MODS));
         route("/v1/catalog/search", exchange -> authenticated(exchange, source, BridgeProtocol.Method.SEARCH_BLOCKS));
         route("/v1/catalog/describe", exchange -> authenticated(exchange, source, BridgeProtocol.Method.DESCRIBE_BLOCK));
+        route("/v1/plans/inspect", exchange -> authenticated(exchange, source, BridgeProtocol.Method.INSPECT_PLAN));
+        route("/v1/plans/publish", exchange -> authenticated(exchange, source, BridgeProtocol.Method.PUBLISH_PLAN));
+        route("/v1/plans/status", exchange -> authenticated(exchange, source, BridgeProtocol.Method.PLAN_STATUS));
         server.start();
         return server.getAddress();
     }
@@ -94,16 +97,19 @@ public final class BuilderBridgeServer implements AutoCloseable {
             case LIST_BLOCK_MODS -> source.listBlockMods(input);
             case SEARCH_BLOCKS -> source.searchBlocks(input);
             case DESCRIBE_BLOCK -> source.describeBlock(input);
+            case INSPECT_PLAN -> source.inspectPlan(input);
+            case PUBLISH_PLAN -> source.publishPlan(input);
+            case PLAN_STATUS -> source.planStatus(input);
             default -> throw new IllegalArgumentException("Unsupported method");
         };
         try {
-            BridgeProtocol.Response response = operation.toCompletableFuture().get(3, TimeUnit.SECONDS);
+            BridgeProtocol.Response response = operation.toCompletableFuture().get(8, TimeUnit.SECONDS);
             sendJson(exchange, response.ok() ? 200 : 409, BridgeProtocol.encodeResponse(response));
         } catch (InterruptedException interrupted) {
             Thread.currentThread().interrupt(); send(exchange, 503, "Request interrupted");
         } catch (ExecutionException | TimeoutException failure) {
             operation.toCompletableFuture().cancel(true);
-            send(exchange, 504, "Minecraft client did not respond in time");
+            send(exchange, 504, "Minecraft client did not respond within the bounded request deadline");
         }
     }
 

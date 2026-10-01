@@ -96,6 +96,7 @@ public final class BuilderModule extends Module {
     private BridgePairing.State reportedPairingState = BridgePairing.State.NONE;
     private BlueprintRenderer blueprintRenderer;
     private BuildPlan renderedPlan;
+    private BuildPlan mcpPreviewPlan;
     private BlueprintDiff.Selection renderedSelection;
     private String legacyMigrationWarning = "";
 
@@ -168,6 +169,7 @@ public final class BuilderModule extends Module {
         if (io != null) io.shutdown();
         if (mc.currentScreen instanceof BuilderScreen) mc.setScreen(null);
         controller = null; agent = null; attachmentPolicy = null; worldCapture = null; projectStore = null; conversationStore = null;
+        mcpPreviewPlan = null;
         io = null; projectSession = null; freshWaiters.forEach(f -> f.completeExceptionally(new CancellationException("Builder deactivated")));
         freshWaiters.clear(); freshAfterCurrent = freshScanActive = false;
         scans.reset(); reportedStatus = null; reportedFailure = BuilderFailureDedupe.State.empty(); activeBoundsContext = null;
@@ -208,7 +210,8 @@ public final class BuilderModule extends Module {
         try {
             bridgeServer = new BuilderBridgeServer(bridgePairing);
             bridgeServer.start(new BuilderBridgeDataSource(mc, scans::snapshot, scans::bounds,
-                () -> bridgeWorldGeneration, this::bridgeWorldIdentity, worldCapture, io, root));
+                () -> bridgeWorldGeneration, this::bridgeWorldIdentity, worldCapture, io, root,
+                () -> activeConversation, this::publishMcpPreview));
         } catch (IOException failure) {
             bridgeServer = null;
             warning("Builder local bridge could not start: %s", failure.getMessage());
@@ -229,6 +232,7 @@ public final class BuilderModule extends Module {
         WorldSnapshot current = scans.snapshot().orElse(null);
         projectSession = current == null ? null : new ProjectSession(activeConversation, current, new MinecraftPlanRules());
         renderedPlan = null; blueprintRenderer = null;
+        mcpPreviewPlan = null;
     }
 
     private String resolveExecutable(String value) {
@@ -317,6 +321,7 @@ public final class BuilderModule extends Module {
         bridgeWorldGeneration++;
         projectSession = null;
         renderedPlan = null; renderedSelection = null; blueprintRenderer = null;
+        mcpPreviewPlan = null;
         failFreshWaiters(new CancellationException(reason));
     }
 
@@ -407,9 +412,11 @@ public final class BuilderModule extends Module {
             FILL, OUTLINE, ShapeMode.Both, 0));
         if (controller != null && drawOverlay) {
             var state = controller.state();
-            BuildPlan plan = state.draft().isPresent() ? state.draft().orElseThrow() : state.accepted().orElse(null);
-            String selectedStage = state.selectedStage();
-            Integer selectedLayer = state.selectedLayer();
+            BuildPlan plan = mcpPreviewPlan != null ? mcpPreviewPlan
+                : state.draft().isPresent() ? state.draft().orElseThrow() : state.accepted().orElse(null);
+            String selectedStage = mcpPreviewPlan != null && !mcpPreviewPlan.stages().isEmpty()
+                ? mcpPreviewPlan.stages().get(mcpPreviewPlan.stages().size() - 1).id() : state.selectedStage();
+            Integer selectedLayer = mcpPreviewPlan != null ? null : state.selectedLayer();
             if (plan != null && selectedStage != null && plan.stages().stream().noneMatch(stage -> stage.id().equals(selectedStage))) {
                 controller.selectStage(0); state = controller.state();
             }
@@ -417,7 +424,8 @@ public final class BuilderModule extends Module {
                     .flatMap(stage -> stage.targets().keySet().stream()).noneMatch(cell -> cell.y() == selectedLayer)) {
                 controller.showAllLayers(); state = controller.state();
             }
-            var selection = new BlueprintDiff.Selection(state.selectedStage(), state.selectedLayer());
+            var selection = mcpPreviewPlan != null ? new BlueprintDiff.Selection(selectedStage, null)
+                : new BlueprintDiff.Selection(state.selectedStage(), state.selectedLayer());
             if (!Objects.equals(renderedPlan, plan) || !Objects.equals(renderedSelection, selection)) {
                 renderedPlan = plan; renderedSelection = selection;
                 try { blueprintRenderer = plan == null ? null : new BlueprintRenderer(plan,
@@ -426,6 +434,14 @@ public final class BuilderModule extends Module {
             }
             if (blueprintRenderer != null) blueprintRenderer.render(event, scans.snapshot().orElse(null), false);
         }
+    }
+
+    private void publishMcpPreview(BuildPlan plan) {
+        if (!mc.isOnThread()) throw new IllegalStateException("MCP preview must be published on Minecraft client thread");
+        mcpPreviewPlan = Objects.requireNonNull(plan);
+        renderedPlan = null; renderedSelection = null; blueprintRenderer = null;
+        if (controller != null) controller.showNotice("MCP plan is preview-only; no blocks were changed.");
+        info("Builder MCP plan preview published; world unchanged.");
     }
 
     @EventHandler private void onAfterWorld(RenderAfterWorldEvent event) {

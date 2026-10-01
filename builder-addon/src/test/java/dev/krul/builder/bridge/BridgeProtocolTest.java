@@ -29,4 +29,13 @@ class BridgeProtocolTest {
         assertEquals(3, decoded.worldGeneration());
         assertEquals(8, decoded.snapshotRevision());
     }
+
+    @Test void roundTripsStrictPlanPayloadAndSingleUseValidationToken() {
+        var request = new BridgeProtocol.Request(BridgeProtocol.VERSION, "plan-1", BridgeProtocol.Method.PUBLISH_PLAN,
+            null, 0, 0, 4, 9, null, null, null, null, "opaque-validation-token", null);
+        var decoded = BridgeProtocol.decodeRequest(BridgeProtocol.encodeRequest(request));
+        assertEquals(request, decoded);
+        assertThrows(IllegalArgumentException.class, () -> BridgeProtocol.decodeRequest(
+            BridgeProtocol.encodeRequest(request).replace("\"validationToken\"", "\"unexpected\"")));
+    }
 }

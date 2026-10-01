@@ -28,6 +28,10 @@ public final class PlanPreviewRenderer {
             if (!stillCurrent.getAsBoolean()) throw new IOException("Plan preview request was cancelled");
             String id = cell.state().id();
             if (models.containsKey(id)) continue;
+            if (id.equals("minecraft:air") || id.equals("minecraft:cave_air") || id.equals("minecraft:void_air")) {
+                models.put(id, new BufferedImage(32, 32, BufferedImage.TYPE_INT_ARGB));
+                continue;
+            }
             try {
                 var preview = blocks.renderNow(id);
                 BufferedImage image = ImageIO.read(new ByteArrayInputStream(preview.bytes()));

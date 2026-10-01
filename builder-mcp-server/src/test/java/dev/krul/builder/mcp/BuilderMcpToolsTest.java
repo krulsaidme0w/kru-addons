@@ -15,13 +15,34 @@ class BuilderMcpToolsTest {
         var bridge = new BridgeClient(URI.create("http://127.0.0.1:47653"), Duration.ofSeconds(1));
         var tools = BuilderMcpServer.toolSpecifications(bridge);
         assertEquals(Set.of("minecraft_status", "read_selection", "capture_view", "pair_local_minecraft",
-                "list_block_mods", "search_blocks", "describe_block"),
+                "list_block_mods", "search_blocks", "describe_block", "inspect_build_plan",
+                "publish_build_preview", "get_build_plan_status", "list_plan_history", "reinspect_archived_plan", "open_plan_viewer"),
             tools.stream().map(tool -> tool.tool().name()).collect(Collectors.toSet()));
         assertTrue(tools.stream().noneMatch(tool -> tool.tool().name().contains("place") || tool.tool().name().contains("move") || tool.tool().name().contains("command")));
-        assertTrue(tools.stream().filter(tool -> !tool.tool().name().equals("pair_local_minecraft"))
+        assertTrue(tools.stream().filter(tool -> !Set.of("pair_local_minecraft", "publish_build_preview").contains(tool.tool().name()))
             .allMatch(tool -> Boolean.TRUE.equals(tool.tool().annotations().readOnlyHint())));
         assertFalse(Boolean.TRUE.equals(tools.stream().filter(tool -> tool.tool().name().equals("pair_local_minecraft"))
             .findFirst().orElseThrow().tool().annotations().readOnlyHint()));
+    }
+
+    @Test void planToolsAreStrictAndPublishIsPreviewOnly() {
+        var tools = BuilderMcpServer.toolSpecifications(new BridgeClient(URI.create("http://127.0.0.1:47653"), Duration.ofSeconds(1)));
+        var inspect = tools.stream().filter(value -> value.tool().name().equals("inspect_build_plan")).findFirst().orElseThrow().tool();
+        assertEquals(Boolean.FALSE, inspect.inputSchema().get("additionalProperties"));
+        assertEquals(Boolean.TRUE, inspect.annotations().readOnlyHint());
+        var properties = (Map<?, ?>) inspect.inputSchema().get("properties");
+        var plan = (Map<?, ?>) properties.get("plan");
+        var planProperties = (Map<?, ?>) plan.get("properties");
+        assertEquals(Boolean.FALSE, plan.get("additionalProperties"));
+        assertTrue(planProperties.containsKey("palette"));
+        assertTrue(planProperties.containsKey("stages"));
+
+        var publish = tools.stream().filter(value -> value.tool().name().equals("publish_build_preview")).findFirst().orElseThrow().tool();
+        assertEquals(Boolean.FALSE, publish.annotations().readOnlyHint());
+        assertEquals(Boolean.FALSE, publish.annotations().destructiveHint());
+        assertEquals(Boolean.FALSE, publish.inputSchema().get("additionalProperties"));
+        assertTrue(tools.stream().filter(value -> Set.of("list_plan_history", "reinspect_archived_plan").contains(value.tool().name()))
+            .allMatch(value -> Boolean.TRUE.equals(value.tool().annotations().readOnlyHint())));
     }
 
     @Test void catalogToolsStayPagedAndReturnOneExactPreview() {

@@ -84,6 +84,59 @@ class BridgeClientTest {
         } finally { server.stop(0); }
     }
 
+    @Test void submitsPlanBoundToExactSnapshotAndPublishesOnlyWithValidationToken() throws Exception {
+        var server = start(0);
+        server.createContext("/v1/plans/inspect", exchange -> {
+            String body = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
+            assertTrue(body.contains("\"method\":\"INSPECT_PLAN\""));
+            assertTrue(body.contains("\"expectedWorldGeneration\":7"));
+            assertTrue(body.contains("\"expectedSnapshotRevision\":9"));
+            assertTrue(body.contains("\\\"schemaVersion\\\":1"));
+            byte[] response = ("{\"version\":1,\"id\":\"r1\",\"ok\":true,\"worldGeneration\":7,\"snapshotRevision\":9,\"message\":\"ok\",\"payload\":\"{\\\"valid\\\":true,\\\"validationToken\\\":\\\"once\\\"}\",\"imageBase64\":\""+PNG+"\"}").getBytes(StandardCharsets.UTF_8);
+            exchange.sendResponseHeaders(200, response.length); exchange.getResponseBody().write(response); exchange.close();
+        });
+        server.createContext("/v1/plans/publish", exchange -> {
+            String body = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
+            assertTrue(body.contains("\"validationToken\":\"once\""));
+            byte[] response = "{\"version\":1,\"id\":\"r2\",\"ok\":true,\"worldGeneration\":7,\"snapshotRevision\":9,\"message\":\"ok\",\"payload\":\"{\\\"published\\\":true,\\\"worldMutation\\\":false}\",\"imageBase64\":null}".getBytes(StandardCharsets.UTF_8);
+            exchange.sendResponseHeaders(200, response.length); exchange.getResponseBody().write(response); exchange.close();
+        });
+        server.start();
+        try {
+            BridgeClient client = new BridgeClient(base(server), Duration.ofSeconds(1)); client.setToken("secret-token");
+            var inspected = client.inspectPlan("{\"schemaVersion\":1}", 7, 9);
+            assertNotNull(inspected.previewPng());
+            assertTrue(inspected.metadata().payload().contains("validationToken"));
+            var published = client.publishPlan("once", 7, 9);
+            assertTrue(published.payload().contains("worldMutation"));
+        } finally { server.stop(0); }
+    }
+
+    @Test void archivesOnlyCompleteBoundedSnapshotPages() throws Exception {
+        var server = start(0);
+        server.createContext("/v1/selection", exchange -> {
+            String request = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
+            assertTrue(request.contains("\"pageSize\":1024"));
+            var payload = new com.google.gson.JsonObject(); payload.addProperty("snapshotRevision", 9); payload.addProperty("total", 2);
+            var cells = new com.google.gson.JsonArray(); cells.add(new com.google.gson.JsonObject()); cells.add(new com.google.gson.JsonObject()); payload.add("cells", cells);
+            var response = new com.google.gson.JsonObject(); response.addProperty("version", 1); response.addProperty("id", "r");
+            response.addProperty("ok", true); response.addProperty("worldGeneration", 7); response.addProperty("snapshotRevision", 9);
+            response.addProperty("message", "ok"); response.addProperty("payload", payload.toString()); response.add("imageBase64", com.google.gson.JsonNull.INSTANCE);
+            byte[] bytes = response.toString().getBytes(StandardCharsets.UTF_8);
+            exchange.sendResponseHeaders(200, bytes.length); exchange.getResponseBody().write(bytes); exchange.close();
+        });
+        server.start();
+        try {
+            var client = new BridgeClient(base(server), Duration.ofSeconds(1)); client.setToken("secret-token");
+            var bounds = new BridgeClient.Bounds(new BridgeClient.Coordinate(0, 64, 0), new BridgeClient.Coordinate(1, 64, 0));
+            String archived = client.readSelectionSnapshot(bounds, 7, 9);
+            var result = com.google.gson.JsonParser.parseString(archived).getAsJsonObject();
+            assertEquals(2, result.get("total").getAsInt()); assertEquals(2, result.getAsJsonArray("cells").size());
+            assertThrows(IllegalArgumentException.class, () -> client.readSelectionSnapshot(
+                new BridgeClient.Bounds(new BridgeClient.Coordinate(0, 0, 0), new BridgeClient.Coordinate(32_768, 0, 0)), 7, 9));
+        } finally { server.stop(0); }
+    }
+
     private static HttpServer start(int port) throws Exception { return HttpServer.create(new InetSocketAddress(InetAddress.getByName("127.0.0.1"), port), 0); }
     private static URI base(HttpServer server) { return URI.create("http://127.0.0.1:" + server.getAddress().getPort()); }
 }

@@ -10,4 +10,7 @@ public interface BridgeDataSource {
     default CompletionStage<BridgeProtocol.Response> listBlockMods(BridgeProtocol.Request request) { return java.util.concurrent.CompletableFuture.failedFuture(new UnsupportedOperationException("Block catalog unavailable")); }
     default CompletionStage<BridgeProtocol.Response> searchBlocks(BridgeProtocol.Request request) { return java.util.concurrent.CompletableFuture.failedFuture(new UnsupportedOperationException("Block catalog unavailable")); }
     default CompletionStage<BridgeProtocol.Response> describeBlock(BridgeProtocol.Request request) { return java.util.concurrent.CompletableFuture.failedFuture(new UnsupportedOperationException("Block catalog unavailable")); }
+    default CompletionStage<BridgeProtocol.Response> inspectPlan(BridgeProtocol.Request request) { return java.util.concurrent.CompletableFuture.failedFuture(new UnsupportedOperationException("Plan preview unavailable")); }
+    default CompletionStage<BridgeProtocol.Response> publishPlan(BridgeProtocol.Request request) { return java.util.concurrent.CompletableFuture.failedFuture(new UnsupportedOperationException("Plan preview unavailable")); }
+    default CompletionStage<BridgeProtocol.Response> planStatus(BridgeProtocol.Request request) { return java.util.concurrent.CompletableFuture.failedFuture(new UnsupportedOperationException("Plan preview unavailable")); }
 }
