@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "builder-minecraft": {
+      "command": "java",
+      "args": ["-jar", "./server/builder-mcp-server.jar"],
+      "cwd": "."
+    }
+  }
+}

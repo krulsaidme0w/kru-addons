@@ -110,6 +110,42 @@ No credentials or login are needed in CI; tests use synthetic process frames.
 These limits and safeguards are code-level behavior, not a claim of tested live
 Minecraft compatibility. See the [runtime checklist](../docs/builder-runtime-checklist.md).
 
+## Optional Codex MCP companion and plan history
+
+The separate `builder-mcp-server` companion lets Codex inspect the explicitly
+selected region, query the active modded block catalog a page at a time (with
+Minecraft-rendered block thumbnails), inspect screenshots, validate a staged
+plan, and publish an approved plan as a Builder hologram preview. It is a
+separate process; it does not replace the in-game Builder UI. Pair it through
+Builder Settings and explicitly approve the local connection in Minecraft.
+
+Build/package the companion and its repository-local Codex plugin with:
+
+```sh
+(cd builder-addon && ./gradlew -p ../builder-mcp-server test packageForCodexPlugin)
+```
+
+This creates an ignored JAR under
+`.agents/plugins/plugins/builder-minecraft/server/`. The plugin source and
+repo-local marketplace definition are available at
+`.agents/plugins/marketplace.json`; they are not automatically installed or
+enabled. The plugin's MCP process must run on the same machine as Minecraft so
+it can reach the loopback bridge. Java 21 is required.
+
+Codex keeps its own conversation history. The companion does not copy or
+archive chat transcripts; it separately stores up to 100 bounded plan revisions
+and their validation/snapshot evidence under the OS application-data directory:
+`$XDG_DATA_HOME/kru-builder/plan-archive` (or
+`~/.local/share/kru-builder/plan-archive`),
+`~/Library/Application Support/kru-builder/plan-archive` on macOS, and
+`%LOCALAPPDATA%/kru-builder/plan-archive` on Windows. The local viewer is served
+on loopback at a tokenized URL returned by `open_plan_viewer`; it has a
+read-only plan timeline and ID-color schematic, not exact modded model geometry.
+Historical proposals are re-inspected against a fresh scan before reuse.
+Publishing a plan changes only the in-game preview. Placing/removing blocks,
+automated movement, inventory edits and chat-command execution are not
+implemented.
+
 ## Build and package
 
 ```sh

@@ -54,6 +54,7 @@ public final class PlanViewerServer implements AutoCloseable {
             if (resource.isEmpty()) { sendResource(exchange, "viewer/index.html", "text/html; charset=utf-8"); return; }
             if (resource.equals("app.js")) { sendResource(exchange, "viewer/app.js", "text/javascript; charset=utf-8"); return; }
             if (resource.equals("styles.css")) { sendResource(exchange, "viewer/styles.css", "text/css; charset=utf-8"); return; }
+            if (resource.equals("model.mjs")) { sendResource(exchange, "viewer/model.mjs", "text/javascript; charset=utf-8"); return; }
             if (resource.equals("api/plans")) {
                 send(exchange, 200, "application/json; charset=utf-8", PlanArchiveStore.encodeSummaries(archive.list(PlanArchiveStore.MAX_RECORDS))); return;
             }

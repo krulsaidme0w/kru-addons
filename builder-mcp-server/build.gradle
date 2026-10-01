@@ -27,3 +27,10 @@ shadowJar {
     mergeServiceFiles()
     manifest { attributes('Main-Class': application.mainClass.get()) }
 }
+
+tasks.register('packageForCodexPlugin', Copy) {
+    dependsOn tasks.named('shadowJar')
+    from(tasks.named('shadowJar').flatMap { it.archiveFile })
+    into(rootProject.file('../.agents/plugins/plugins/builder-minecraft/server'))
+    rename { 'builder-mcp-server.jar' }
+}

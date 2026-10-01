@@ -19,7 +19,7 @@ class BuilderMcpToolsTest {
                 "publish_build_preview", "get_build_plan_status", "list_plan_history", "reinspect_archived_plan", "open_plan_viewer"),
             tools.stream().map(tool -> tool.tool().name()).collect(Collectors.toSet()));
         assertTrue(tools.stream().noneMatch(tool -> tool.tool().name().contains("place") || tool.tool().name().contains("move") || tool.tool().name().contains("command")));
-        assertTrue(tools.stream().filter(tool -> !Set.of("pair_local_minecraft", "publish_build_preview").contains(tool.tool().name()))
+        assertTrue(tools.stream().filter(tool -> !Set.of("pair_local_minecraft", "publish_build_preview", "inspect_build_plan", "reinspect_archived_plan").contains(tool.tool().name()))
             .allMatch(tool -> Boolean.TRUE.equals(tool.tool().annotations().readOnlyHint())));
         assertFalse(Boolean.TRUE.equals(tools.stream().filter(tool -> tool.tool().name().equals("pair_local_minecraft"))
             .findFirst().orElseThrow().tool().annotations().readOnlyHint()));
@@ -29,7 +29,8 @@ class BuilderMcpToolsTest {
         var tools = BuilderMcpServer.toolSpecifications(new BridgeClient(URI.create("http://127.0.0.1:47653"), Duration.ofSeconds(1)));
         var inspect = tools.stream().filter(value -> value.tool().name().equals("inspect_build_plan")).findFirst().orElseThrow().tool();
         assertEquals(Boolean.FALSE, inspect.inputSchema().get("additionalProperties"));
-        assertEquals(Boolean.TRUE, inspect.annotations().readOnlyHint());
+        assertEquals(Boolean.FALSE, inspect.annotations().readOnlyHint());
+        assertEquals(Boolean.FALSE, inspect.annotations().idempotentHint());
         var properties = (Map<?, ?>) inspect.inputSchema().get("properties");
         var plan = (Map<?, ?>) properties.get("plan");
         var planProperties = (Map<?, ?>) plan.get("properties");
@@ -41,7 +42,10 @@ class BuilderMcpToolsTest {
         assertEquals(Boolean.FALSE, publish.annotations().readOnlyHint());
         assertEquals(Boolean.FALSE, publish.annotations().destructiveHint());
         assertEquals(Boolean.FALSE, publish.inputSchema().get("additionalProperties"));
-        assertTrue(tools.stream().filter(value -> Set.of("list_plan_history", "reinspect_archived_plan").contains(value.tool().name()))
+        var reinspect = tools.stream().filter(value -> value.tool().name().equals("reinspect_archived_plan")).findFirst().orElseThrow().tool();
+        assertEquals(Boolean.FALSE, reinspect.annotations().readOnlyHint());
+        assertEquals(Boolean.FALSE, reinspect.annotations().idempotentHint());
+        assertTrue(tools.stream().filter(value -> value.tool().name().equals("list_plan_history"))
             .allMatch(value -> Boolean.TRUE.equals(value.tool().annotations().readOnlyHint())));
     }
 

@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>Builder · Plan archive</title>
+  <link rel="stylesheet" href="./styles.css">
+  <script type="module" src="./app.js"></script>
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="./" aria-label="Builder plan archive home"><span class="brand-mark" aria-hidden="true"></span><span>Builder</span></a>
+    <div class="top-context"><span class="live-dot" aria-hidden="true"></span><span>Local plan archive</span><span class="separator">/</span><span id="connection-label">Loading records…</span></div>
+    <a class="top-link" href="./api/plans" target="_blank" rel="noreferrer">Plan data</a>
+  </header>
+  <main class="workspace">
+    <aside class="history" aria-labelledby="history-title">
+      <div class="panel-heading"><h1 id="history-title">Plan history</h1><span id="record-count" class="count">—</span></div>
+      <p class="quiet-copy">Saved plans, snapshots and validation reports. No chat transcript.</p>
+      <nav id="history-list" class="history-list" aria-label="Saved plans" aria-live="polite"></nav>
+      <div id="history-empty" class="empty-state" hidden>No saved plans yet.<br><span>Inspect one from Codex to start a revision history.</span></div>
+      <div id="history-error" class="inline-error" hidden></div>
+      <button id="reload-history" class="text-button" type="button">Refresh archive</button>
+    </aside>
+
+    <section class="scene-panel" aria-label="Plan region viewer">
+      <div class="scene-heading">
+        <div class="scene-title"><p class="eyebrow">Selected region</p><h2 id="plan-title">Choose an archived plan</h2><p id="plan-meta" class="scene-meta">The Minecraft snapshot remains authoritative.</p></div>
+        <div class="scene-actions"><button id="reset-camera" class="quiet-button" type="button" disabled>Reset view</button><span class="fidelity-tag">ID-color schematic · not mod geometry</span></div>
+      </div>
+      <div id="scene-wrap" class="scene-wrap">
+        <canvas id="scene" tabindex="0" aria-label="Rotatable voxel schematic. Drag to orbit; use arrow keys to rotate."></canvas>
+        <div id="scene-empty" class="scene-empty"><span class="empty-cross" aria-hidden="true"></span><p>Choose a plan revision</p><span>Its saved region snapshot and proposed transitions will appear here.</span></div>
+        <div class="scene-legend" aria-label="Plan change legend"><span><i class="legend-place"></i>Place</span><span><i class="legend-replace"></i>Replace</span><span><i class="legend-remove"></i>Remove</span><span><i class="legend-unknown"></i>Unknown</span></div>
+      </div>
+      <div class="scene-controls">
+        <label class="control-field">Stage<select id="stage-select" disabled><option>—</option></select></label>
+        <label class="control-field layer-field">Y layer <output id="layer-output">All</output><input id="layer-range" type="range" min="0" max="0" value="0" disabled></label>
+        <label class="all-layers"><input id="all-layers" type="checkbox" checked disabled> All layers</label>
+        <label class="control-field zoom-field">Zoom<input id="zoom-range" type="range" min="55" max="180" value="100" disabled></label>
+        <span class="gesture-hint">Drag to orbit · scroll to zoom</span>
+      </div>
+      <div id="stage-timeline" class="stage-timeline" aria-label="Plan stages"></div>
+    </section>
+
+    <aside class="inspector" aria-labelledby="inspector-title">
+      <div class="panel-heading"><h2 id="inspector-title">Inspection</h2><span id="validation-state" class="state-tag">No plan</span></div>
+      <div id="cell-inspector" class="cell-inspector" aria-live="polite"><span class="crosshair" aria-hidden="true"></span><p>Hover a voxel</p><span>Exact block IDs and coordinates are shown here.</span></div>
+      <div class="details-section">
+        <h3>Changes</h3><dl id="plan-counts" class="change-counts"><div><dt>Place</dt><dd>—</dd></div><div><dt>Replace</dt><dd>—</dd></div><div><dt>Remove</dt><dd>—</dd></div><div><dt>Unknown</dt><dd>—</dd></div></dl>
+      </div>
+      <div class="details-section preview-section"><h3>Plan preview</h3><div id="preview-empty" class="preview-empty">No preview image was saved.</div><img id="plan-preview" src="data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs=" alt="Saved isometric plan schematic" hidden></div>
+      <div class="details-section warnings-section"><h3>Validation notes</h3><ul id="validation-notes"><li class="muted-note">Choose a revision to inspect its saved report.</li></ul></div>
+      <p class="safety-note"><span aria-hidden="true">◇</span> Preview only. This viewer cannot change the Minecraft world.</p>
+    </aside>
+  </main>
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+</body>
+</html>

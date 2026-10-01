@@ -1,0 +1,19 @@
+{
+  "name": "builder-minecraft",
+  "version": "0.1.0",
+  "description": "Inspect Minecraft worlds, research modded blocks, and review validated build-plan previews.",
+  "author": {
+    "name": "Local developer"
+  },
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Builder Minecraft",
+    "shortDescription": "Plan Minecraft builds against your live world.",
+    "longDescription": "Pair with the local Builder addon to inspect a selected region, research modded blocks, validate staged plans, and review read-only previews and history.",
+    "developerName": "KRU",
+    "category": "Productivity",
+    "capabilities": [],
+    "defaultPrompt": ["Inspect my selected Minecraft region", "Research blocks for this build", "Review my latest build plan"]
+  },
+  "mcpServers": "./.mcp.json"
+}

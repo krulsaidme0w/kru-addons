@@ -91,7 +91,7 @@ public final class BuilderMcpServer {
                     McpSchema.TextContent.builder("Current view · generation " + result.worldGeneration() + " · snapshot " + result.snapshotRevision()).build(),
                     McpSchema.ImageContent.builder(Base64.getEncoder().encodeToString(result.png()), "image/png").build())).isError(false).build();
             }));
-        tools.add(tool("inspect_build_plan", "Validate a strict staged PLACE/REPLACE/REMOVE plan against the exact current selection snapshot. Returns diagnostics and a schematic preview; does not change the world.", planInspectionSchema(), true,
+        tools.add(tool("inspect_build_plan", "Validate a strict staged PLACE/REPLACE/REMOVE plan against the exact current selection snapshot and archive this plan revision locally. Returns diagnostics and a schematic preview; does not change the world.", planInspectionSchema(), false,
             (exchange, request) -> {
                 Map<String, Object> args = request.arguments();
                 String json = new com.google.gson.Gson().toJson(args.get("plan"));
@@ -121,10 +121,10 @@ public final class BuilderMcpServer {
                     return textResult("Local plan archive: " + archiveLocation() + "\n" + PlanArchiveStore.encodeSummaries(records), false);
                 } catch (java.io.IOException failure) { throw new IllegalStateException("Could not read local plan archive: " + failure.getMessage(), failure); }
             }));
-        tools.add(tool("reinspect_archived_plan", "Load one archived plan by ID, bind it to the provided current snapshot, and revalidate all exact preconditions. This does not publish it.",
+        tools.add(tool("reinspect_archived_plan", "Load one archived plan by ID, bind it to the provided current snapshot, revalidate all exact preconditions, and archive the fresh inspection as a new revision. This does not publish it.",
             objectSchema(Map.of("archiveId", Map.of("type", "string", "format", "uuid"),
                 "worldGeneration", Map.of("type", "integer", "minimum", 1), "snapshotRevision", Map.of("type", "integer", "minimum", 1)),
-                "archiveId", "worldGeneration", "snapshotRevision"), true,
+                "archiveId", "worldGeneration", "snapshotRevision"), false,
             (exchange, request) -> {
                 Map<String, Object> args = request.arguments(); UUID id = UUID.fromString(args.get("archiveId").toString());
                 PlanArchiveStore.Record record;
