@@ -17,6 +17,7 @@ class ComposerInputTest {
             @Override public double textWidth(String text, int length, boolean title) { return length; }
         };
         composer.width = 200;
+        composer.set("Keep this draft until I confirm it");
         composer.setFocused(true);
         AtomicInteger submissions = new AtomicInteger();
         composer.action = () -> submissions.addAndGet(100);
@@ -24,10 +25,11 @@ class ComposerInputTest {
 
         assertTrue(composer.onCharTyped('x'));
         assertEquals(0, submissions.get());
-        assertTrue(ComposerInput.submitOnEnter(composer, GLFW_KEY_ENTER, submissions::incrementAndGet));
+        assertTrue(ComposerInput.submitOnEnter(composer, GLFW_KEY_ENTER, ignored -> submissions.incrementAndGet()));
         assertEquals(1, submissions.get());
+        assertEquals("xKeep this draft until I confirm it", composer.get());
         assertFalse(composer.isFocused());
-        assertFalse(ComposerInput.submitOnEnter(composer, GLFW_KEY_ENTER, submissions::incrementAndGet));
+        assertFalse(ComposerInput.submitOnEnter(composer, GLFW_KEY_ENTER, ignored -> submissions.incrementAndGet()));
         assertEquals(1, submissions.get());
     }
 

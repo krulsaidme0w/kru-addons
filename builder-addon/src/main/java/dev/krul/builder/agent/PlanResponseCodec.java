@@ -102,7 +102,7 @@ public final class PlanResponseCodec {
                 if (state == null) throw invalid("Operation references undeclared palette entry");
                 if (kind.equals("block")) {
                     fields(operation, Set.of("op", "position", "state"));
-                    add(targets, allTargets, coordinate(required(operation, "position")), state);
+                    add(targets, allTargets, coordinate(required(operation, "position")), state, string(required(stage, "id")));
                 } else if (kind.equals("fill")) {
                     fields(operation, Set.of("op", "min", "max", "state"));
                     Cell min = coordinate(required(operation, "min")), max = coordinate(required(operation, "max"));
@@ -115,7 +115,7 @@ public final class PlanResponseCodec {
                         throw invalid("Fill exceeds target limit or has reversed bounds");
                     for (long x = min.x(); x <= max.x(); x++) for (long y = min.y(); y <= max.y(); y++)
                         for (long z = min.z(); z <= max.z(); z++) add(targets, allTargets,
-                            new Cell(Math.toIntExact(x), Math.toIntExact(y), Math.toIntExact(z)), state);
+                        new Cell(Math.toIntExact(x), Math.toIntExact(y), Math.toIntExact(z)), state, string(required(stage, "id")));
                 } else throw invalid("Unsupported operation");
             }
             stages.add(new BuildStage(string(required(stage, "id")), string(required(stage, "title")), after, targets));
@@ -124,9 +124,10 @@ public final class PlanResponseCodec {
         return new BuildPlan(request.project(), revision, request.contextRevision(), stages);
     }
 
-    private static void add(Map<Cell, StateKey> targets, Set<Cell> all, Cell cell, StateKey state) throws IOException {
+    private static void add(Map<Cell, StateKey> targets, Set<Cell> all, Cell cell, StateKey state, String stageId) throws IOException {
         StateKey old = targets.putIfAbsent(cell, state);
-        if (old != null && !old.equals(state)) throw invalid("Conflicting assignments within a stage");
+        if (old != null && !old.equals(state)) throw invalid("Conflicting assignments within stage '" + stageId
+            + "' at [" + cell.x() + "," + cell.y() + "," + cell.z() + "] (" + old.id() + " vs " + state.id() + ")");
         all.add(cell);
         if (all.size() > PlanValidator.MAX_TARGETS) throw invalid("Proposal exceeds target limit");
     }

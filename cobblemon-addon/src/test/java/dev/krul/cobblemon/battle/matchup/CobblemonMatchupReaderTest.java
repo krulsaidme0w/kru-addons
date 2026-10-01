@@ -81,6 +81,10 @@ class CobblemonMatchupReaderTest {
         public List<PokemonType> types(String species, Set<String> aspects) { return species.equals("charizard") ? List.of(FIRE, FLYING) : List.of(WATER); }
         public String moveId(Object text) { String s = String.valueOf(text); return s.startsWith("cobblemon.move.") ? s.substring(15) : ""; }
         public String text(Object value) { return value == null ? "" : value.toString(); }
+        @Override public int baseSpeed(String species, Set<String> aspects) { return species.equals("charizard") ? 100 : -1; }
+        @Override public List<String> possibleAttacks(String species, Set<String> aspects, int level) {
+            return species.equals("charizard") && level == 50 ? List.of("Surf") : List.of();
+        }
     });
 
     Shown shown(UUID id) { return new Shown(id, "Charizard", new Properties("charizard", 50), Set.of(), 75, 100, true, "brn"); }
@@ -120,6 +124,17 @@ class CobblemonMatchupReaderTest {
         assertEquals(Set.of("shiny", "mega-x"), BattleReflection.get(portrait, "aspects"));
         Object hidden = BattleReflection.get(result.enemies().get(1), "portrait");
         assertTrue(hidden == null || "".equals(BattleReflection.get(hidden, "speciesId")));
+    }
+
+    @Test void opponentTooltipDataSeparatesSpeciesPossibilitiesFromBattleRevealedFacts() {
+        var visible = shown(foe);
+        var result = reader.read(battle(battleId, List.of()), player,
+            repository(List.of(new Dto(foe, false, "", List.of(), "", null, visible))))
+            .enemies().getFirst();
+
+        assertTrue(result.notes().stream().anyMatch(note -> note.contains("Base Speed: 100") && note.contains("not battle Speed")));
+        assertTrue(result.notes().stream().anyMatch(note -> note.contains("Possible attacks") && note.contains("Surf")));
+        assertTrue(result.moves().isEmpty(), "species learnset candidates must not become revealed battle moves");
     }
     @Test void activeRequestOverridesMoveAvailabilityAndLegalRoster() {
         var poke = new Showdown(mine, List.of("water"), List.of("water"), List.of("surf"), "12/100 par", "torrent", "Blastoise, L50", true);

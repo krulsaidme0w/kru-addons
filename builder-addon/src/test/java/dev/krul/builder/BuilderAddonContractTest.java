@@ -1,6 +1,7 @@
 package dev.krul.builder;
 
 import com.google.gson.JsonParser;
+import dev.krul.builder.agent.BuilderDynamicTools;
 import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
@@ -16,6 +17,15 @@ import org.objectweb.asm.Opcodes;
 import static org.junit.jupiter.api.Assertions.*;
 
 class BuilderAddonContractTest {
+    @Test void localToolsAreReadOnlyAndExposeBoundedInspection() {
+        var tools = BuilderDynamicTools.definitions();
+        assertEquals(List.of("list_block_mods", "search_blocks", "describe_block", "inspect_build_plan"), tools.asList().stream()
+            .map(tool -> tool.getAsJsonObject().get("name").getAsString()).toList());
+        assertTrue(tools.asList().stream().map(tool -> tool.getAsJsonObject().get("description").getAsString())
+            .allMatch(description -> description.contains("Read-only")));
+        assertEquals(Boolean.FALSE, tools.get(1).getAsJsonObject().getAsJsonObject("inputSchema").get("additionalProperties").getAsBoolean());
+    }
+
     private JarFile archive() throws Exception {
         return new JarFile(System.getProperty("builder.archive"));
     }

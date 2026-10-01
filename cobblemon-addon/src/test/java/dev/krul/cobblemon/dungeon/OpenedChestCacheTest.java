@@ -35,4 +35,30 @@ class OpenedChestCacheTest {
         assertEquals(0, cache.size());
         assertFalse(cache.isOpen("dungeons:dungeons", chest));
     }
+
+    @Test
+    void chestIsHiddenOnlyAfterItsContainerScreenOpens() {
+        OpenedChestCache cache = new OpenedChestCache();
+        BlockPos chest = new BlockPos(12, 64, -3);
+
+        cache.noteActivation("dungeons:dungeon", chest, 100);
+        assertFalse(cache.isOpen("dungeons:dungeon", chest));
+        assertTrue(cache.containerOpened("dungeons:dungeon", 101));
+        assertTrue(cache.isOpen("dungeons:dungeon", chest));
+        assertFalse(cache.isOpen("minecraft:overworld", chest));
+    }
+
+    @Test
+    void unrelatedOrLateContainerOpenDoesNotMarkPendingChest() {
+        OpenedChestCache cache = new OpenedChestCache();
+        BlockPos chest = new BlockPos(12, 64, -3);
+
+        cache.noteActivation("dungeons:dungeon", chest, 100);
+        assertFalse(cache.containerOpened("minecraft:overworld", 101));
+        assertFalse(cache.isOpen("dungeons:dungeon", chest));
+
+        cache.noteActivation("dungeons:dungeon", chest, 100);
+        assertFalse(cache.containerOpened("dungeons:dungeon", 201));
+        assertFalse(cache.isOpen("dungeons:dungeon", chest));
+    }
 }

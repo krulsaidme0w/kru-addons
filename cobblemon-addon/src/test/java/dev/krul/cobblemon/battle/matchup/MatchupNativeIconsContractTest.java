@@ -41,17 +41,18 @@ class MatchupNativeIconsContractTest {
             require(jar, "client/render/models/blockbench/FloatingState", "<init>", "()V", false);
             require(jar, "client/gui/PokemonGuiUtilsKt", "drawProfilePokemon",
                 "(L" + NATIVE + "pokemon/RenderablePokemon;Lnet/minecraft/class_4587;Lorg/joml/Quaternionf;L"
-                    + NATIVE + "entity/PoseType;L" + NATIVE + "client/render/models/blockbench/PosableState;FFZZFFFFFF)V", true);
+                    + NATIVE + "entity/PoseType;L" + NATIVE + "client/render/models/blockbench/PosableState;FFL"
+                    + NATIVE + "client/gui/ProfileTransformType;ZFFFFFFI)V", true);
             requireField(jar, "entity/PoseType", "PROFILE", "L" + NATIVE + "entity/PoseType;");
+            requireField(jar, "client/gui/ProfileTransformType", "PROFILE", "L" + NATIVE + "client/gui/ProfileTransformType;");
         }
     }
 
-    // This fork adds isStellar: upstream's nine-argument TypeIcon constructor is incompatible.
     @Test void installedForkProvidesTheSmallNonStellarTypeBoundary() throws Exception {
         try (var jar = new ZipFile(System.getenv("COBBLEMON_RUNTIME_JAR"))) {
             require(jar, "client/gui/TypeIcon", "<init>",
                 "(Ljava/lang/Number;Ljava/lang/Number;L" + NATIVE + "api/types/ElementalType;L"
-                    + NATIVE + "api/types/ElementalType;ZZFFFZ)V", false);
+                    + NATIVE + "api/types/ElementalType;ZZFFF)V", false);
             require(jar, "client/gui/TypeIcon", "render", "(Lnet/minecraft/class_332;)V", false);
             for (var type : PokemonType.values()) {
                 requireField(jar, "api/types/ElementalTypes", type.name(), "L" + NATIVE + "api/types/ElementalType;");

@@ -45,6 +45,14 @@ class ConversationArchiveCodecTest {
         assertEquals(archive, codec.decode(codec.encode(archive)));
     }
 
+    @Test void preservesMultilineChatAndDiagnosticText() throws Exception {
+        var entry = new ConversationEntry(UUID.randomUUID(), ConversationEntry.Kind.AGENT, 12,
+            "First line\nSecond line\twith tab", Optional.empty());
+        var archive = new ConversationArchive(CHAT, "New chat", 12, 12, List.of(entry), List.of());
+        var codec = new ConversationArchiveCodec();
+        assertEquals(archive, codec.decode(codec.encode(archive)));
+    }
+
     @Test void rejectsUnsupportedSchemaAndOversizedArchive() {
         var codec = new ConversationArchiveCodec();
         assertThrows(IOException.class, () -> codec.decode("{\"schemaVersion\":99}"));

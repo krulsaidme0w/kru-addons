@@ -23,5 +23,8 @@ public record ConversationArchive(UUID id, String title, long createdAtEpochMill
             throw new IllegalArgumentException("Conversation history contains null entries");
         if (plans.stream().anyMatch(plan -> !id.equals(plan.plan().project())))
             throw new IllegalArgumentException("Plan belongs to another conversation");
+        var planRevisions = plans.stream().map(plan -> plan.plan().revision()).collect(java.util.stream.Collectors.toSet());
+        if (entries.stream().flatMap(entry -> entry.planRevision().stream()).anyMatch(revision -> !planRevisions.contains(revision)))
+            throw new IllegalArgumentException("Conversation timeline references a missing plan revision");
     }
 }

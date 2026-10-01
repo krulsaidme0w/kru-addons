@@ -19,6 +19,9 @@ public final class BattleMatrixModel {
     public record MoveGroup(Fighter fighter, List<Move> moves) {
         public MoveGroup { moves = List.copyOf(moves); }
     }
+    public record Coverage(int covered, int revealed) {
+        public String label() { return covered + "/" + revealed; }
+    }
 
     public static List<MoveGroup> groups(MatchupSnapshot snapshot) {
         if (snapshot == null) return List.of();
@@ -36,6 +39,21 @@ public final class BattleMatrixModel {
     public static List<Fighter> enemies(MatchupSnapshot snapshot) {
         if (snapshot == null) return List.of();
         return snapshot.enemies().stream().limit(6).toList();
+    }
+
+    /** Counts revealed opponents with at least one confirmed super-effective known move. */
+    public static Coverage coverage(List<Move> moves, List<Fighter> enemies) {
+        if (moves == null || enemies == null) return new Coverage(0, 0);
+        int revealed = 0, covered = 0;
+        for (Fighter enemy : enemies) {
+            if (enemy == null || currentTypes(enemy).types().isEmpty()) continue;
+            revealed++;
+            if (moves.stream().anyMatch(move -> {
+                BattleMatrixCell result = evaluate(move, enemy);
+                return result.multiplier() != null && result.multiplier() > 1;
+            })) covered++;
+        }
+        return new Coverage(covered, revealed);
     }
 
     public static BattleMatrixCell evaluate(Move move, Fighter target) {

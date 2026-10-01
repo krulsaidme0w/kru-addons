@@ -65,7 +65,7 @@ public final class ScanSession {
     public String status() {
         if (!ready()) return "No world: selection unavailable";
         var bounds = bounds();
-        if (bounds.isEmpty()) return "Incomplete selection: mark both corners";
+        if (bounds.isEmpty()) return "Incomplete selection: enter six coordinates";
         if (oversize(bounds.orElseThrow())) return "Oversize selection: maximum " + ScanCursor.MAX_CELLS + " cells";
         if (cursor != null) return "Scanning; " + (complete == null ? "no complete snapshot yet" :
             "retaining revision " + complete.revision() + ", unknown=" + complete.unknown().size());

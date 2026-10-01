@@ -1,6 +1,9 @@
 package dev.krul.builder.ui;
 
 import dev.krul.builder.agent.AgentClient;
+import dev.krul.builder.archive.BuilderDiagnostic;
+import dev.krul.builder.archive.ConversationPlan;
+import dev.krul.builder.archive.ConversationSummary;
 import dev.krul.builder.model.WorldSnapshot;
 import dev.krul.builder.project.BuildPlan;
 import dev.krul.builder.project.Progress;
@@ -24,9 +27,13 @@ public record BuilderUiState(Phase phase, AgentClient.Status connection, String 
                              String executable,
                              URI authorizationUrl, String userCode,
                              boolean nonAtomicSave, List<String> cleanupWarnings,
-                             boolean cloudConsent) {
+                             boolean cloudConsent, List<ConversationSummary> conversations, UUID selectedConversation,
+                             List<ConversationPlan> planHistory, boolean archiveReady, String archiveError) {
     public enum Phase { DISCONNECTED, READY, PREPARING, WAITING, FAILED, CANCELLED }
-    public record Message(String role, String text) {}
+    public record Message(String role, String text, Optional<BuilderDiagnostic> diagnostic) {
+        public Message(String role, String text) { this(role, text, Optional.empty()); }
+        public Message { diagnostic = diagnostic == null ? Optional.empty() : diagnostic; }
+    }
     public record Prepared(String text, long contextRevision, UUID session,
                            List<AttachmentPolicy.Attachment> attachments) {
         public Prepared { attachments = List.copyOf(attachments); }
@@ -45,5 +52,8 @@ public record BuilderUiState(Phase phase, AgentClient.Status connection, String 
         draft = draft == null ? Optional.empty() : draft;
         accepted = accepted == null ? Optional.empty() : accepted;
         cleanupWarnings = List.copyOf(cleanupWarnings);
+        conversations = List.copyOf(conversations);
+        planHistory = List.copyOf(planHistory);
+        archiveError = archiveError == null ? "" : archiveError;
     }
 }

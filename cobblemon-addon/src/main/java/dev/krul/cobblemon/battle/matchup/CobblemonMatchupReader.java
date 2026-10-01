@@ -13,6 +13,8 @@ public final class CobblemonMatchupReader {
         List<PokemonType> types(String species, Set<String> aspects);
         String moveId(Object text);
         String text(Object value);
+        default int baseSpeed(String species, Set<String> aspects) { return -1; }
+        default List<String> possibleAttacks(String species, Set<String> aspects, int level) { return List.of(); }
     }
     private final Catalog catalog;
     public CobblemonMatchupReader(Catalog catalog) { this.catalog = catalog; }
@@ -192,6 +194,12 @@ public final class CobblemonMatchupReader {
         if (name.isBlank()) name = species.isBlank() ? "Unknown" : species;
         double hp = shownHp(shown);
         String status = status(shown);
+        int level = (int) number(get(properties, "getLevel"), 0);
+        int baseSpeed = catalog.baseSpeed(species, aspectNames);
+        if (baseSpeed >= 0) notes.add("Base Speed: " + baseSpeed + " (species baseline; not battle Speed).");
+        List<String> possible = catalog.possibleAttacks(species, aspectNames, level);
+        if (!possible.isEmpty()) notes.add("Possible attacks (learnset examples, not this Pokemon's known set): "
+            + String.join(", ", possible));
         notes.add(active ? "Visible active opponent; moves/ability are server-revealed facts." : "Benched opponent; HP/types are last reported.");
         if (current.isEmpty()) notes.add("Current defensive types unknown: client projection carries no resolved battle types; repository Tera is last observed.");
         Object buffs = get(dto, "getBuffs");

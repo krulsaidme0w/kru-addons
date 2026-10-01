@@ -79,7 +79,9 @@ public final class BattleMatrixContent implements OverlayContent {
         }
         for (int row = 0; row < rows.size(); row++) {
             var group = rows.get(row);
-            renderHeader(canvas, group.fighter(), ownHeader(row), ownPortrait(row));
+            var coverage = BattleMatrixModel.coverage(group.moves(), state.enemies());
+            renderHeader(canvas, group.fighter(), ownHeader(row), ownPortrait(row),
+                typeText(group.fighter()) + " · Cov " + coverage.label());
             var labels = BattleMatrixLabels.abbreviations(group.moves().stream().map(move -> move.data().name()).toList());
             for (int column = 0; column < state.enemies().size(); column++) {
                 Rect bounds = cell(row, column);
@@ -105,6 +107,10 @@ public final class BattleMatrixContent implements OverlayContent {
     }
 
     private void renderHeader(OverlayCanvas canvas, Fighter fighter, Rect header, Rect portrait) {
+        renderHeader(canvas, fighter, header, portrait, typeText(fighter));
+    }
+
+    private void renderHeader(OverlayCanvas canvas, Fighter fighter, Rect header, Rect portrait, String detail) {
         if (fighter.active()) canvas.fill(header.x() + 3, header.y(), header.width() - 6, 1, canvas.accent());
         var nativeBounds = new dev.krul.cobblemon.battle.matchup.MatchupPanelLayout.Rect(
             portrait.x(), portrait.y(), portrait.width(), portrait.height());
@@ -115,7 +121,7 @@ public final class BattleMatrixContent implements OverlayContent {
         int x = portrait.right() + 4;
         int available = header.right() - x - 4;
         canvas.textFit(fighterName(fighter), x, header.y() + 9, available, canvas.text());
-        canvas.textFit(typeText(fighter), x, header.y() + 21, available, canvas.muted());
+        canvas.textFit(detail, x, header.y() + 21, available, canvas.muted());
     }
 
     static String typeBadge(Move move) {
@@ -140,7 +146,14 @@ public final class BattleMatrixContent implements OverlayContent {
         }
         for (int row = 0; row < state.groups().size(); row++) {
             var group = state.groups().get(row);
-            if (ownHeader(row).contains(x, y)) return fighterTooltip(group.fighter());
+            if (ownHeader(row).contains(x, y)) {
+                List<String> lines = new ArrayList<>(fighterTooltip(group.fighter()));
+                var coverage = BattleMatrixModel.coverage(group.moves(), state.enemies());
+                lines.add("Known-move coverage: " + coverage.covered() + " of " + coverage.revealed()
+                    + " revealed opponents with confirmed current types.");
+                lines.add("Type chart only; not a damage or safe-switch prediction.");
+                return List.copyOf(lines);
+            }
             if (group.moves().isEmpty()) for (int column = 0; column < state.enemies().size(); column++) {
                 if (cell(row, column).contains(x, y)) return List.of(fighterName(group.fighter()), "Moves unknown.");
             }

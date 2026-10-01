@@ -57,6 +57,17 @@ class DungeonRenderSelectorTest {
             "test:room", 100, 1000, 0, 0, 0, 64,
             new DungeonTargetFilters(false, true, true, true, true, true), TestProfiles.PROFILE).isEmpty());
     }
+
+    @Test void openedDungeonChestIsRemovedFromRenderTargetsButOtherTargetsRemain() {
+        var cache = new OpenedChestCache();
+        var opened = observation("opened", "cobblemon:chest", 1, 100);
+        var unopened = observation("unopened", "cobblemon:chest", 2, 100);
+        cache.markOpen("test:room", opened.position());
+        var targets = DungeonRenderSelector.select(List.of(opened, unopened), "test:room", 100, 1000,
+            0, 0, 0, 64, DungeonTargetFilters.ALL, TestProfiles.PROFILE, cache);
+
+        assertEquals(List.of("unopened"), targets.stream().map(DungeonRenderTarget::identity).toList());
+    }
     @Test void academyModelNumbersOnlyMatchExplicitPresetAndDimension() throws Exception {
         RuleProfile profile = TestProfiles.academy();
         for (var model : Map.of(1150, "Poké Ball", 1151, "Ultra Ball", 1152, "Master Ball", 1478, "Dream Ball").entrySet()) {

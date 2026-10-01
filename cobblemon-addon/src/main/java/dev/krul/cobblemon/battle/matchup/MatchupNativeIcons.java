@@ -25,12 +25,11 @@ import java.util.Set;
  * False leaves the fallback to the caller. Own one instance per panel; call {@link #clear()}
  * after a resource reload or when discarding its battle. No world/Pokemon entities are retained.
  *
- * ABI and transforms checked against Abes-Hutts 1.21.1.1.7.3-1.0.5:
+ * ABI and transforms checked against Cobblemon 1.8.1:
  * StorageSlot.renderPokemon uses a 25px slot, center X/top+1, scale(2.5,2.5,1),
- * Euler XYZ (13,35,0), and drawProfilePokemon scale=4.5. Its default mask 32648
- * supplies PROFILE, profileTransform=true, baseScale=false, RGBA=1 and head angles=0.
- * TypeIcon's small diameter is 18 texels at scale .5 (9 GUI pixels); this fork
- * additionally requires the final isStellar boolean, which must be false here.
+ * Euler XYZ (13,35,0), drawProfilePokemon scale=4.5 and PROFILE transform.
+ * TypeIcon's small diameter is 18 texels at scale .5 (9 GUI pixels); 1.8.1
+ * uses the upstream nine-argument constructor.
  */
 public final class MatchupNativeIcons {
     private static final String NATIVE = "com.cobblemon.mod.common.";
@@ -40,7 +39,7 @@ public final class MatchupNativeIcons {
     // A null renderable memoizes a failed asset for this exact registry species object.
     private record Profile(Object species, Object resolver, Object renderable, Object state) {}
     private record PortraitApi(Method species, Constructor<?> renderable, Constructor<?> state,
-                               Object pose, Method draw, CleanupApi cleanup) {}
+                               Object pose, Object transform, Method draw, CleanupApi cleanup) {}
     private record CleanupApi(Method layers, Method pose, Field context, Method currentState,
                               Method buffer, Method currentLayers) {}
     private record AssetApi(Object repository, Method variations, Method aspects, Object profileSprite,
@@ -136,7 +135,7 @@ public final class MatchupNativeIcons {
             // Native rendering conjugates its input quaternion, so never share a mutable rotation.
             Quaternionf rotation = new Quaternionf().rotationXYZ((float) Math.toRadians(13), (float) Math.toRadians(35), 0);
             api.draw.invoke(null, selected.renderable, matrices, rotation, api.pose, selected.state,
-                0f, 4.5f, true, false, 1f, 1f, 1f, 1f, 0f, 0f);
+                0f, 4.5f, api.transform, false, 1f, 1f, 1f, 1f, 0f, 0f, 0);
         },
             () -> { if (model != null) api.cleanup.layers.invoke(model); },
             () -> { if (model != null) api.cleanup.pose.invoke(model); },
@@ -166,7 +165,7 @@ public final class MatchupNativeIcons {
                 // Null primary type selects the fork's Stellar texture, not an unknown icon.
                 if (elementalType != null) {
                     icon = Optional.of(api.icon.newInstance(0, 0, elementalType, null,
-                        false, true, 15f, 7.5f, 1f, false));
+                        false, true, 15f, 7.5f, 1f));
                 }
             } catch (ReflectiveOperationException | RuntimeException | LinkageError ignored) {
                 // Cache missing fields/constructor failures as well as successful icons.
@@ -263,15 +262,17 @@ public final class MatchupNativeIcons {
                     || cleanup.context.getType() != nativeClass("client.render.models.blockbench.repository.RenderContext")) {
                     return null;
                 }
+                Class<?> transform = nativeClass("client.gui.ProfileTransformType");
                 portraitApi = new PortraitApi(
                     nativeClass("api.pokemon.PokemonSpecies").getMethod("getByIdentifier", Identifier.class),
                     renderable.getConstructor(species, Set.class, ItemStack.class),
                     nativeClass("client.render.models.blockbench.FloatingState").getConstructor(),
                     pose.getField("PROFILE").get(null),
+                    transform.getField("PROFILE").get(null),
                     nativeClass("client.gui.PokemonGuiUtilsKt").getMethod("drawProfilePokemon", renderable,
-                        MatrixStack.class, Quaternionf.class, pose, state, float.class, float.class,
+                        MatrixStack.class, Quaternionf.class, pose, state, float.class, float.class, transform,
                         boolean.class, boolean.class, float.class, float.class, float.class, float.class,
-                        float.class, float.class), cleanup);
+                        float.class, float.class, int.class), cleanup);
             } catch (ReflectiveOperationException | RuntimeException | LinkageError ignored) {
                 portraitApi = null;
             }
@@ -287,7 +288,7 @@ public final class MatchupNativeIcons {
                 Class<?> icon = nativeClass("client.gui.TypeIcon");
                 typeApi = new TypeApi(nativeClass("api.types.ElementalTypes"),
                     icon.getConstructor(Number.class, Number.class, elementalType, elementalType,
-                        boolean.class, boolean.class, float.class, float.class, float.class, boolean.class),
+                        boolean.class, boolean.class, float.class, float.class, float.class),
                     icon.getMethod("render", DrawContext.class));
             } catch (ReflectiveOperationException | RuntimeException | LinkageError ignored) {
                 typeApi = null;

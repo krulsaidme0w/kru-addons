@@ -5,7 +5,15 @@ import dev.krul.builder.blueprint.BlueprintDiff;
 import dev.krul.builder.blueprint.BlueprintRenderer;
 import dev.krul.builder.agent.AgentClient;
 import dev.krul.builder.agent.CodexProcess;
+import dev.krul.builder.agent.CodexExecutable;
+import dev.krul.builder.agent.BuilderDynamicTools;
+import dev.krul.builder.archive.ConversationArchiveStore;
+import dev.krul.builder.archive.LegacyProjectMigration;
 import dev.krul.builder.context.ScanSession;
+import dev.krul.builder.context.BoundsContext;
+import dev.krul.builder.context.BoundsInput;
+import dev.krul.builder.context.BoundsStore;
+import dev.krul.builder.model.Bounds;
 import dev.krul.builder.model.Cell;
 import dev.krul.builder.model.StateKey;
 import dev.krul.builder.model.WorldSnapshot;
@@ -14,6 +22,7 @@ import dev.krul.builder.project.ProjectStore;
 import dev.krul.builder.project.BuildPlan;
 import dev.krul.builder.ui.BuilderController;
 import dev.krul.builder.ui.BuilderHud;
+import dev.krul.builder.ui.BuilderOverlayVisibility;
 import dev.krul.builder.ui.BuilderScreen;
 import dev.krul.builder.ui.BuilderUiState;
 import dev.krul.builder.visual.AttachmentPolicy;
@@ -27,8 +36,11 @@ import meteordevelopment.meteorclient.gui.GuiTheme;
 import meteordevelopment.meteorclient.gui.GuiThemes;
 import meteordevelopment.meteorclient.gui.widgets.WLabel;
 import meteordevelopment.meteorclient.gui.widgets.WWidget;
+import meteordevelopment.meteorclient.gui.widgets.containers.WHorizontalList;
+import meteordevelopment.meteorclient.gui.widgets.input.WTextBox;
 import meteordevelopment.meteorclient.renderer.ShapeMode;
 import meteordevelopment.meteorclient.settings.KeybindSetting;
+import meteordevelopment.meteorclient.settings.BoolSetting;
 import meteordevelopment.meteorclient.settings.Setting;
 import meteordevelopment.meteorclient.settings.StringSetting;
 import meteordevelopment.meteorclient.systems.hud.Hud;
@@ -54,16 +66,24 @@ public final class BuilderModule extends Module {
     private final Setting<String> executable = settings.getDefaultGroup().add(new StringSetting.Builder()
         .name("codex-executable").description("Codex CLI executable used by the isolated Builder profile.")
         .defaultValue("codex").onChanged(this::onExecutableChanged).build());
+    private final Setting<Boolean> renderOverlay = settings.getDefaultGroup().add(new BoolSetting.Builder()
+        .name("render-overlay").description("Render selection bounds and the current build-plan preview in the world.")
+        .defaultValue(true).build());
+    private final BoundsStore boundsStore;
     private final List<CompletableFuture<WorldSnapshot>> freshWaiters = new ArrayList<>();
     private WLabel statusLabel;
     private String reportedStatus;
+    private BuilderFailureDedupe.State reportedFailure = BuilderFailureDedupe.State.empty();
     private Object boundWorld, boundConnection, boundPlayer;
+    private BoundsContext activeBoundsContext;
     private boolean freshAfterCurrent, freshScanActive;
     private long freshBaselineRevision;
     private ExecutorService io;
     private AttachmentPolicy attachmentPolicy;
     private WorldCapture worldCapture;
     private ProjectStore projectStore;
+    private ConversationArchiveStore conversationStore;
+    private UUID activeConversation = PROJECT;
     private ProjectSession projectSession;
     private AgentClient agent;
     private BuilderController controller;
@@ -71,15 +91,13 @@ public final class BuilderModule extends Module {
     private BlueprintRenderer blueprintRenderer;
     private BuildPlan renderedPlan;
     private BlueprintDiff.Selection renderedSelection;
+    private String legacyMigrationWarning = "";
 
     public BuilderModule() {
         super(BuilderCategory.BUILDER, "builder", "Select and inspect bounded regions; review every proposed plan before use.");
+        boundsStore = new BoundsStore(mc.runDirectory.toPath());
         runInMainMenu = true;
         addAction("open-builder-chat", "Open the native Builder conversation window.", this::openBuilder);
-        addAction("mark-first", "Mark the looked-at block as the first corner.", () -> mark(true));
-        addAction("mark-second", "Mark the looked-at block as the second corner.", () -> mark(false));
-        addAction("clear-selection", "Forget both corners and all scan evidence.", this::clearSelection);
-        addAction("scan-selection", "Request a fresh bounded scan; keep the previous result until complete.", this::requestScan);
     }
 
     private void addAction(String name, String description, Runnable action) {
@@ -90,17 +108,42 @@ public final class BuilderModule extends Module {
     private void syncContext() {
         if (!mc.isOnThread()) throw new IllegalStateException("Builder context requires the client thread");
         Object world = mc.world, connection = mc.getNetworkHandler(), player = mc.player;
-        if (boundWorld != world || boundConnection != connection || boundPlayer != player) {
-            boolean changed = boundWorld != null || boundConnection != null || boundPlayer != null;
+        BoundsContext nextContext = currentBoundsContext();
+        boolean identityChanged = boundWorld != world || boundConnection != connection || boundPlayer != player;
+        boolean contextChanged = !Objects.equals(activeBoundsContext, nextContext);
+        if (identityChanged || contextChanged) {
+            Optional<Bounds> retained = scans.bounds();
+            boolean changed = boundWorld != null || boundConnection != null || boundPlayer != null || activeBoundsContext != null;
             boundWorld = world; boundConnection = connection; boundPlayer = player;
-            scans.bind(world, connection, player);
+            scans.reset(); scans.bind(world, connection, player);
+            activeBoundsContext = nextContext;
+            Optional<Bounds> restore = contextChanged ? (nextContext == null ? Optional.empty() : boundsStore.load(nextContext)) : retained;
+            restore.ifPresent(this::setBounds);
             if (changed) invalidateWorldSession("World session changed");
         } else scans.bind(world, connection, player);
     }
 
+    private BoundsContext currentBoundsContext() {
+        if (mc.world == null) return null;
+        String dimension = mc.world.getRegistryKey().getValue().toString();
+        if (mc.isInSingleplayer()) {
+            if (mc.getServer() == null) return null;
+            return BoundsContext.local(mc.getServer().getSavePath(net.minecraft.util.WorldSavePath.ROOT).toString(), dimension);
+        }
+        var server = mc.getCurrentServerEntry();
+        if (server == null || server.address == null || server.address.isBlank()) return null;
+        return BoundsContext.remote(server.address, dimension);
+    }
+
+    private void setBounds(Bounds bounds) {
+        scans.setFirst(bounds.min()); scans.setSecond(bounds.max());
+    }
+
     @Override public void onActivate() {
         scans.reset(); projectSession = null; reportedStatus = null;
+        reportedFailure = BuilderFailureDedupe.State.empty();
         boundWorld = boundConnection = boundPlayer = null;
+        activeBoundsContext = null;
         syncContext();
         startRuntime(++runtimeGeneration);
         ensureHud();
@@ -113,18 +156,27 @@ public final class BuilderModule extends Module {
         if (attachmentPolicy != null && io != null) io.execute(attachmentPolicy::close);
         if (io != null) io.shutdown();
         if (mc.currentScreen instanceof BuilderScreen) mc.setScreen(null);
-        controller = null; agent = null; attachmentPolicy = null; worldCapture = null; projectStore = null;
+        controller = null; agent = null; attachmentPolicy = null; worldCapture = null; projectStore = null; conversationStore = null;
         io = null; projectSession = null; freshWaiters.forEach(f -> f.completeExceptionally(new CancellationException("Builder deactivated")));
         freshWaiters.clear(); freshAfterCurrent = freshScanActive = false;
-        scans.reset(); reportedStatus = null;
+        scans.reset(); reportedStatus = null; reportedFailure = BuilderFailureDedupe.State.empty(); activeBoundsContext = null;
     }
 
     private void startRuntime(long generation) {
+        legacyMigrationWarning = "";
         io = Executors.newFixedThreadPool(2, task -> { Thread thread = new Thread(task, "builder-io"); thread.setDaemon(true); return thread; });
         Path root = mc.runDirectory.toPath().resolve("kru-builder");
         CompletableFuture.supplyAsync(() -> {
-            try { return new AttachmentPolicy(root.resolve("attachments")); }
-            catch (IOException failure) { throw new CompletionException(failure); }
+            try {
+                projectStore = new ProjectStore(root.resolve("projects"));
+                conversationStore = new ConversationArchiveStore(root.resolve("conversations"));
+                try {
+                    LegacyProjectMigration.migrate(projectStore, conversationStore, PROJECT, System.currentTimeMillis());
+                } catch (IOException migrationFailure) {
+                    legacyMigrationWarning = migrationFailure.getMessage() == null ? "Legacy Builder plan could not be imported" : migrationFailure.getMessage();
+                }
+                return new AttachmentPolicy(root.resolve("attachments"));
+            } catch (IOException failure) { throw new CompletionException(failure); }
         }, io).whenComplete((policy, failure) -> mc.execute(() -> {
             if (generation != runtimeGeneration || !isActive()) {
                 if (policy != null) CompletableFuture.runAsync(policy::close);
@@ -134,24 +186,44 @@ public final class BuilderModule extends Module {
                 warning("Builder attachment storage unavailable: %s", failure.getCause() == null ? failure.getMessage() : failure.getCause().getMessage());
                 return;
             }
-            initializeRuntime(root, policy);
+            initializeRuntime(root, policy, generation);
         }));
     }
 
-    private void initializeRuntime(Path root, AttachmentPolicy policy) {
+    private void initializeRuntime(Path root, AttachmentPolicy policy, long generation) {
         attachmentPolicy = policy;
-        projectStore = new ProjectStore(root.resolve("projects"));
+        activeConversation = legacyMigrationWarning.isBlank() ? PROJECT : UUID.randomUUID();
         worldCapture = new WorldCapture(mc, attachmentPolicy, io);
         MinecraftPlanRules rules = new MinecraftPlanRules();
-        agent = new CodexProcess(root.resolve("codex-profile"), executable.get(), rules);
-        controller = new BuilderController(PROJECT, executable.get(), this::freshSnapshot, () -> projectSession,
-            agent, worldCapture::capture, attachmentPolicy, projectStore, mc::execute, io, this::restoreProject);
+        var catalogTools = new BuilderDynamicTools(new ClientBlockCatalogTools(mc,
+            () -> isActive() && runtimeGeneration == generation));
+        agent = new CodexProcess(root.resolve("codex-profile"), resolveExecutable(executable.get()), rules, catalogTools);
+        controller = new BuilderController(activeConversation, executable.get(), this::freshSnapshot, () -> projectSession,
+            agent, worldCapture::capture, attachmentPolicy, conversationStore, mc::execute, io,
+            this::activateConversation, this::restoreProject);
+        if (!legacyMigrationWarning.isBlank()) controller.showNotice("Legacy plan migration warning: " + legacyMigrationWarning);
+    }
+
+    private void activateConversation(UUID id) {
+        if (Objects.equals(activeConversation, id)) return;
+        activeConversation = Objects.requireNonNull(id);
+        WorldSnapshot current = scans.snapshot().orElse(null);
+        projectSession = current == null ? null : new ProjectSession(activeConversation, current, new MinecraftPlanRules());
+        renderedPlan = null; blueprintRenderer = null;
+    }
+
+    private String resolveExecutable(String value) {
+        return CodexExecutable.resolve(mc.runDirectory.toPath(), value,
+            System.getProperty("os.name", "").toLowerCase(Locale.ROOT).startsWith("windows"));
     }
 
     private void onExecutableChanged(String value) {
         if (controller == null || io == null || io.isShutdown()) return;
         MinecraftPlanRules rules = new MinecraftPlanRules();
-        AgentClient replacement = new CodexProcess(mc.runDirectory.toPath().resolve("kru-builder/codex-profile"), value, rules);
+        long generation = runtimeGeneration;
+        var catalogTools = new BuilderDynamicTools(new ClientBlockCatalogTools(mc,
+            () -> isActive() && runtimeGeneration == generation));
+        AgentClient replacement = new CodexProcess(mc.runDirectory.toPath().resolve("kru-builder/codex-profile"), resolveExecutable(value), rules, catalogTools);
         agent = replacement;
         controller.replaceAgent(replacement);
     }
@@ -170,7 +242,7 @@ public final class BuilderModule extends Module {
         if (!mc.isOnThread()) return CompletableFuture.failedFuture(new IllegalStateException("Fresh scan must start on client thread"));
         syncContext();
         if (!isActive() || attachmentPolicy == null) return CompletableFuture.failedFuture(new IllegalStateException("Builder runtime is unavailable"));
-        if (scans.bounds().isEmpty()) return CompletableFuture.failedFuture(new IllegalStateException("Mark two corners before scanning"));
+        if (scans.bounds().isEmpty()) return CompletableFuture.failedFuture(new IllegalStateException("Set valid numeric bounds before scanning"));
         var future = new CompletableFuture<WorldSnapshot>();
         freshWaiters.add(future);
         if (freshScanActive || freshAfterCurrent) return future;
@@ -193,7 +265,13 @@ public final class BuilderModule extends Module {
         Optional<WorldSnapshot> complete = scans.snapshot();
         if (complete.isEmpty() || complete.get().revision() <= freshBaselineRevision) return;
         WorldSnapshot snapshot = complete.orElseThrow();
-        if (projectSession == null) projectSession = new ProjectSession(PROJECT, snapshot, new MinecraftPlanRules());
+        if (projectSession == null) {
+            try { projectSession = new ProjectSession(activeConversation, snapshot, new MinecraftPlanRules()); }
+            catch (IllegalArgumentException invalidSnapshot) {
+                failFreshWaiters(new IllegalStateException("Selection contains unknown or unloaded blocks; choose a fully loaded region", invalidSnapshot));
+                return;
+            }
+        }
         freshScanActive = false;
         List<CompletableFuture<WorldSnapshot>> completed = List.copyOf(freshWaiters); freshWaiters.clear();
         completed.forEach(future -> future.complete(snapshot));
@@ -222,7 +300,7 @@ public final class BuilderModule extends Module {
     }
 
     @EventHandler private void onJoined(GameJoinedEvent event) { syncContext(); }
-    @EventHandler private void onLeft(GameLeftEvent event) { invalidateWorldSession("World disconnected"); scans.reset(); boundWorld = boundConnection = boundPlayer = null; }
+    @EventHandler private void onLeft(GameLeftEvent event) { invalidateWorldSession("World disconnected"); scans.reset(); boundWorld = boundConnection = boundPlayer = null; activeBoundsContext = null; }
 
     private void mark(boolean first) {
         if (!isActive()) { warning("Enable Builder before marking a selection."); return; }
@@ -253,24 +331,28 @@ public final class BuilderModule extends Module {
     private void openBuilder() {
         if (!isActive()) { warning("Enable Builder to open the conversation."); return; }
         if (controller == null) { warning("Builder storage is unavailable; check the module status."); return; }
-        mc.setScreen(new BuilderScreen(GuiThemes.get(), controller));
+        mc.setScreen(new BuilderScreen(GuiThemes.get(), controller, () -> boundsWidget(GuiThemes.get()),
+            renderOverlay::get, () -> renderOverlay.set(!renderOverlay.get())));
     }
 
     @EventHandler private void onTick(TickEvent.Post event) {
         syncContext(); scans.tick(); tickFreshScan();
         if (controller != null) scans.snapshot().ifPresent(controller::observeSnapshot);
+        reportFailure();
         if (projectSession == null && !freshScanActive && !freshAfterCurrent)
-            scans.snapshot().ifPresent(snapshot -> projectSession = new ProjectSession(PROJECT, snapshot, new MinecraftPlanRules()));
+            scans.snapshot().filter(snapshot -> snapshot.unknown().isEmpty())
+                .ifPresent(snapshot -> projectSession = new ProjectSession(activeConversation, snapshot, new MinecraftPlanRules()));
         report();
     }
 
     @EventHandler private void onRender(Render3DEvent event) {
         syncContext();
-        if (!WorldCapture.suppressPreviewThisFrame()) scans.bounds().ifPresent(bounds -> event.renderer.box(
+        boolean drawOverlay = BuilderOverlayVisibility.shouldRender(renderOverlay.get(), WorldCapture.suppressPreviewThisFrame());
+        if (drawOverlay) scans.bounds().ifPresent(bounds -> event.renderer.box(
             bounds.min().x(), bounds.min().y(), bounds.min().z(),
             (double) bounds.max().x() + 1, (double) bounds.max().y() + 1, (double) bounds.max().z() + 1,
             FILL, OUTLINE, ShapeMode.Both, 0));
-        if (controller != null && !WorldCapture.suppressPreviewThisFrame()) {
+        if (controller != null && drawOverlay) {
             var state = controller.state();
             BuildPlan plan = state.draft().isPresent() ? state.draft().orElseThrow() : state.accepted().orElse(null);
             String selectedStage = state.selectedStage();
@@ -305,19 +387,113 @@ public final class BuilderModule extends Module {
         if (statusLabel != null) statusLabel.set(status);
         if (mc.player != null && !status.equals(reportedStatus)) { info("%s", status); reportedStatus = status; }
     }
+
+    private void reportFailure() {
+        BuilderUiState state = controller == null ? null : controller.state();
+        BuilderFailureDedupe.Transition transition = BuilderFailureDedupe.advance(reportedFailure,
+            state != null && state.phase() == BuilderUiState.Phase.FAILED,
+            state == null ? null : state.status());
+        reportedFailure = transition.state();
+        if (transition.report() != null && mc.player != null) info("Builder request failed: %s", transition.report());
+    }
     @Override public String getInfoString() { syncContext(); return scans.status(); }
     @Override public WWidget getWidget(GuiTheme theme) {
         syncContext();
         var list = theme.verticalList();
-        list.add(theme.label("Read only. Mark two corners; up to 32,768 cells, 2,048 reads/tick."));
-        list.add(theme.label("Open the native chat window to review context and proposals."));
-        statusLabel = list.add(theme.label(scans.status())).widget();
         list.add(theme.button("Open Builder conversation")).expandX().widget().action = this::openBuilder;
-        list.add(theme.button("Mark first looked-at block")).expandX().widget().action = () -> mark(true);
-        list.add(theme.button("Mark second looked-at block")).expandX().widget().action = () -> mark(false);
-        list.add(theme.button("Clear selection")).expandX().widget().action = this::clearSelection;
-        list.add(theme.button("Scan selection again")).expandX().widget().action = this::requestScan;
         return list;
+    }
+
+    public WWidget boundsWidget(GuiTheme theme) {
+        syncContext();
+        BoundsContext[] editorContext = {activeBoundsContext};
+        Optional<Bounds> initial = scans.bounds();
+        String[] values = coordinateValues(initial.orElse(null));
+        WTextBox[] fields = new WTextBox[6];
+        String[] labels = {"X1", "Y1", "Z1", "X2", "Y2", "Z2"};
+        var editor = theme.verticalList();
+        editor.add(theme.label("Selection bounds · max 32,768 cells")).expandX();
+        WLabel dimensions = editor.add(theme.label(boundsSummary(initial.orElse(null)))).expandX().widget();
+        for (int rowIndex = 0; rowIndex < 2; rowIndex++) {
+            WHorizontalList row = theme.horizontalList();
+            for (int column = 0; column < 3; column++) {
+                int index = rowIndex * 3 + column;
+                row.add(theme.label(labels[index]));
+                fields[index] = theme.textBox(values[index], labels[index]);
+                fields[index].minWidth = 80;
+                row.add(fields[index]);
+            }
+            editor.add(row).expandX();
+        }
+        WLabel feedback = editor.add(theme.label("")).expandX().widget();
+        WHorizontalList actions = theme.horizontalList();
+        actions.add(theme.button("Apply")).widget().action = () -> {
+            syncContext();
+            if (!Objects.equals(editorContext[0], activeBoundsContext)) {
+                editorContext[0] = activeBoundsContext;
+                String[] refreshed = coordinateValues(scans.bounds().orElse(null));
+                for (int i = 0; i < fields.length; i++) fields[i].set(refreshed[i]);
+                feedback.set("Context changed; review bounds and apply again.");
+                return;
+            }
+            if (activeBoundsContext == null) {
+                feedback.set("Join a world before applying bounds.");
+                return;
+            }
+            Optional<Bounds> parsed = BoundsInput.parse(fields[0].get(), fields[1].get(), fields[2].get(),
+                fields[3].get(), fields[4].get(), fields[5].get());
+            if (parsed.isEmpty()) {
+                feedback.set("Use six integers; maximum is 32,768 cells.");
+                return;
+            }
+            try {
+                boundsStore.save(activeBoundsContext, parsed.orElseThrow());
+                setBounds(parsed.orElseThrow());
+                invalidateSelection("Bounds changed");
+                feedback.set("Applied. Next send scans this area.");
+                dimensions.set(boundsSummary(parsed.orElseThrow()));
+                report();
+            } catch (IOException failure) {
+                feedback.set("Save failed; check bounds storage.");
+            }
+        };
+        actions.add(theme.button("Clear")).widget().action = () -> {
+            syncContext();
+            if (!Objects.equals(editorContext[0], activeBoundsContext)) {
+                editorContext[0] = activeBoundsContext;
+                String[] refreshed = coordinateValues(scans.bounds().orElse(null));
+                for (int i = 0; i < fields.length; i++) fields[i].set(refreshed[i]);
+                feedback.set("Context changed; review bounds first.");
+                return;
+            }
+            try {
+                if (activeBoundsContext != null) boundsStore.clear(activeBoundsContext);
+                scans.clearSelection();
+                invalidateSelection("Bounds cleared");
+                for (WTextBox field : fields) field.set("");
+                dimensions.set("No bounds selected.");
+                feedback.set(activeBoundsContext == null ? "Current selection cleared; no world bounds were saved." : "Saved bounds cleared.");
+                report();
+            } catch (IOException failure) {
+                feedback.set("Clear failed; check bounds storage.");
+            }
+        };
+        editor.add(actions).expandX();
+        return editor;
+    }
+
+    private static String[] coordinateValues(Bounds bounds) {
+        if (bounds == null) return new String[]{"", "", "", "", "", ""};
+        return new String[]{Integer.toString(bounds.min().x()), Integer.toString(bounds.min().y()), Integer.toString(bounds.min().z()),
+            Integer.toString(bounds.max().x()), Integer.toString(bounds.max().y()), Integer.toString(bounds.max().z())};
+    }
+
+    private static String boundsSummary(Bounds bounds) {
+        if (bounds == null) return "No bounds selected.";
+        long width = (long) bounds.max().x() - bounds.min().x() + 1;
+        long height = (long) bounds.max().y() - bounds.min().y() + 1;
+        long depth = (long) bounds.max().z() - bounds.min().z() + 1;
+        return "Dimensions " + width + " × " + height + " × " + depth + " · " + bounds.volume() + " cells";
     }
 
     private void ensureHud() {

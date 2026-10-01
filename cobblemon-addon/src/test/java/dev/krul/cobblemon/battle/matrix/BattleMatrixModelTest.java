@@ -113,6 +113,14 @@ class BattleMatrixModelTest {
         assertEquals(6, BattleMatrixModel.enemies(snapshot).size());
     }
 
+    @Test void coverageCountsOnlyRevealedTargetsWithAConfirmedSuperEffectiveKnownMove() {
+        var moves = List.of(move("Flamethrower", FIRE));
+        var foes = List.of(current("Venusaur", GRASS, POISON), current("Gengar", GHOST),
+            baseOnly("Unknown battle typing", GRASS));
+
+        assertEquals(new BattleMatrixModel.Coverage(1, 2), BattleMatrixModel.coverage(moves, foes));
+    }
+
     private static BattleMatrixCell evaluate(Move move, Fighter target) {
         return BattleMatrixModel.evaluate(move, target);
     }

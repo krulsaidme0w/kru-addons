@@ -38,6 +38,7 @@ public final class ConversationArchiveCodec {
             item.addProperty("kind", entry.kind().name());
             item.addProperty("createdAt", entry.createdAtEpochMillis());
             item.addProperty("text", entry.text());
+            item.add("planRevision", entry.planRevision().<JsonElement>map(JsonPrimitive::new).orElse(JsonNull.INSTANCE));
             item.add("diagnostic", entry.diagnostic().<JsonElement>map(this::encodeDiagnostic).orElse(JsonNull.INSTANCE));
             entries.add(item);
         }
@@ -108,14 +109,21 @@ public final class ConversationArchiveCodec {
     }
 
     private ConversationEntry decodeEntry(JsonElement value) throws IOException {
-        JsonObject item = object(value, "id", "kind", "createdAt", "text", "diagnostic");
+        if (value == null || !value.isJsonObject()) throw invalid("Expected object");
+        JsonObject item = value.getAsJsonObject();
+        Set<String> oldFields = Set.of("id", "kind", "createdAt", "text", "diagnostic");
+        Set<String> newFields = Set.of("id", "kind", "createdAt", "text", "planRevision", "diagnostic");
+        if (!item.keySet().equals(oldFields) && !item.keySet().equals(newFields))
+            throw invalid("Unexpected conversation entry fields");
         ConversationEntry.Kind kind = enumValue(ConversationEntry.Kind.class, string(item.get("kind")));
         JsonElement encodedDiagnostic = item.get("diagnostic");
         var diagnostic = encodedDiagnostic.isJsonNull() ? java.util.Optional.<BuilderDiagnostic>empty()
             : java.util.Optional.of(decodeDiagnostic(encodedDiagnostic));
+        var planRevision = !item.has("planRevision") || item.get("planRevision").isJsonNull() ? java.util.Optional.<Long>empty()
+            : java.util.Optional.of(number(item.get("planRevision")));
         try {
             return new ConversationEntry(uuid(string(item.get("id"))), kind, number(item.get("createdAt")),
-                string(item.get("text")), diagnostic);
+                string(item.get("text")), diagnostic, planRevision);
         } catch (IllegalArgumentException failure) { throw invalid("Invalid conversation entry", failure); }
     }
 
@@ -231,7 +239,8 @@ public final class ConversationArchiveCodec {
             if (Character.isHighSurrogate(ch)) {
                 if (++i >= value.length() || !Character.isLowSurrogate(value.charAt(i))) throw invalid("Invalid Unicode surrogate");
             } else if (Character.isLowSurrogate(ch)) throw invalid("Invalid Unicode surrogate");
-            else if (ch < 0x20) throw invalid("Literal control character in archive string");
+            else if (ch < 0x20 && ch != '\n' && ch != '\r' && ch != '\t')
+                throw invalid("Unsupported control character in archive string");
         }
         return value;
     }

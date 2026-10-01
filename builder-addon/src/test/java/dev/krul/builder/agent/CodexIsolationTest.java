@@ -32,10 +32,11 @@ class CodexIsolationTest {
         assertEquals(java.util.List.of("app-server", "--stdio", "--strict-config",
             "-c", "features.hooks=false", "-c", "features.plugins=false", "-c", "features.apps=false",
             "-c", "features.multi_agent=false", "-c", "features.image_generation=false",
-            "-c", "features.code_mode=false", "-c", "features.code_mode_host=false",
+            "-c", "features.code_mode=false", "-c", "features.code_mode_host=true",
             "-c", "features.memories=false", "-c", "skills.include_instructions=false",
             "-c", "skills.bundled.enabled=false", "-c", "orchestrator.skills.enabled=false",
-            "-c", "notify=[]", "-c", "web_search=\"disabled\"", "-c", "project_doc_max_bytes=0"), CodexIsolation.arguments());
+            "-c", "notify=[]", "-c", "web_search=\"disabled\"", "-c", "project_doc_max_bytes=0",
+            "-c", "approval_policy=\"never\"", "-c", "sandbox_mode=\"read-only\""), CodexIsolation.arguments());
     }
 
     @Test void childEnvironmentDoesNotInheritCredentialsOrRemoteEndpoints() {
@@ -58,6 +59,14 @@ class CodexIsolationTest {
         reenabled.getAsJsonObject("features").addProperty("plugins", true);
         assertThrows(CodexIsolation.IncompatibleException.class,
             () -> CodexIsolation.validateEffectiveConfig(reenabled));
+        var codeModeEnabled = safeConfig();
+        codeModeEnabled.getAsJsonObject("features").addProperty("code_mode", true);
+        assertThrows(CodexIsolation.IncompatibleException.class,
+            () -> CodexIsolation.validateEffectiveConfig(codeModeEnabled));
+        var hostDisabled = safeConfig();
+        hostDisabled.getAsJsonObject("features").addProperty("code_mode_host", false);
+        assertThrows(CodexIsolation.IncompatibleException.class,
+            () -> CodexIsolation.validateEffectiveConfig(hostDisabled));
         var unsafeProvider = safeConfig();
         unsafeProvider.addProperty("model_provider", "custom");
         assertThrows(CodexIsolation.IncompatibleException.class,
@@ -74,11 +83,28 @@ class CodexIsolationTest {
             () -> CodexIsolation.validateLayers(new JsonObject()));
     }
 
+    @Test void acceptsNativeWindowsDefaultChatGptEndpointButRejectsOverrides() {
+        for (String endpoint : java.util.List.of("https://chatgpt.com/backend-api/", "https://chatgpt.com/backend-api")) {
+            var config = safeConfig();
+            config.addProperty("chatgpt_base_url", endpoint);
+            assertDoesNotThrow(() -> CodexIsolation.validateEffectiveConfig(config));
+        }
+        for (String endpoint : java.util.List.of("https://evil.invalid/backend-api/",
+                "https://chatgpt.com.evil.invalid/backend-api/", "http://chatgpt.com/backend-api/",
+                "https://chatgpt.com/backend-api/?redirect=evil")) {
+            var config = safeConfig();
+            config.addProperty("chatgpt_base_url", endpoint);
+            assertThrows(CodexIsolation.IncompatibleException.class,
+                () -> CodexIsolation.validateEffectiveConfig(config));
+        }
+    }
+
     private static JsonObject safeConfig() {
         var config = new JsonObject();
         var features = new JsonObject();
         for (var key : new String[]{"hooks", "plugins", "apps", "multi_agent", "code_mode",
-                "code_mode_host", "image_generation", "memories"}) features.addProperty(key, false);
+                "image_generation", "memories"}) features.addProperty(key, false);
+        features.addProperty("code_mode_host", true);
         config.add("features", features);
         config.addProperty("web_search", "disabled");
         config.addProperty("approval_policy", "never");

@@ -9,49 +9,59 @@ modify Meteor core.
 
 1. Install the official Meteor client and this addon's binary JAR in a separate
    test instance. Do not install the sources JAR.
-2. Enable Builder in Meteor and mark two opposite corners of a small test area.
+2. Enable Builder in Meteor, open its chat, and set both area corners numerically
+   under **Settings**. Apply saves the bounds for this world/server and dimension.
+   Restoring bounds does not scan or send anything.
    Only already-loaded client chunks are read. An unloaded or unavailable cell
    remains unknown; an incomplete scan cannot be accepted as a complete plan.
-3. Open the Builder window and read its cloud data disclosure. Grant the
-   explicit **session consent** control before connecting; consent defaults off
-   and resets when the Builder session closes. Revoke it at any time to cancel
-   pending transmission. Then connect using a native Codex CLI executable on the
+3. Choose **Connect / sign in** using a native Codex CLI executable on the
    same operating system as Minecraft, then use **Sign in with Codex** for the
    Builder-owned profile. Builder requires exactly `codex-cli 0.153.4` and
    fails closed if the installed protocol or effective configuration is not
    compatible. It does not copy the regular Codex login/configuration. No WSL
    fallback is attempted; Windows installations may need the direct
    `codex.exe` executable path in Builder's module settings.
-4. Write a request and choose **Prepare**. Preparation refreshes the bounded
-   local scan and captures a preview; it does not transmit the request.
-   Optionally add a reference PNG by entering its path; Builder copies the file
-   into its private attachment store and leaves the original untouched. Inspect
-   the displayed text, context summary and images. Remove any image you do not
-   want included. The next preparation replaces its previous automatic world
-   screenshot while retaining selected reference images. Only **Confirm and send to Codex** transmits the
-   reviewed request. The current world context is checked again before sending.
-5. Inspect a returned proposal and explicitly accept it to make it the active
-   project. The addon renders guidance; the player places or removes blocks
+   With the default `codex` setting, Builder first uses an explicitly installed
+   instance-local `kru-builder/bin/codex.exe` on Windows (`bin/codex` on other
+   systems). Explicit executable settings are never overridden. Builder does
+   not download executables or modify your global Codex installation.
+4. Write a request and choose **Send**. This action refreshes the bounded
+   local scan, captures a world screenshot, checks the context again and sends
+   the request without another confirmation dialog.
+   Use **+ Image** to reveal the optional reference PNG path; Builder copies the file
+   into its private attachment store and leaves the original untouched. Remove
+   unwanted references before sending. Each request replaces the previous automatic
+   world screenshot while retaining selected reference images.
+5. A valid returned proposal appears automatically as a hologram. **Save plan**
+   persists it as the active project. The addon renders guidance; the player places or removes blocks
    manually. Reopen a saved project only when deliberately choosing it for the
    current selection/world.
 
+The main window keeps the conversation and current action together.
+**Settings** contains saved numeric bounds, connection details and saved
+project reopening; **Back to chat** preserves the entered request. Failed
+requests show a short status in the window and report the full error once in
+local game chat. Stage and progress controls appear when a proposal is available.
+
 ## Data and privacy
 
-Codex runs as a local process, but confirmed requests use the configured model
-provider and are not offline. The Builder screen states before connection that
-local Codex sends prompts, selected geometry and chosen images to OpenAI, and
-images may retain names visible in the world. Consent is explicit, defaults off,
-is limited to the current Builder session and can be revoked at any time. A
-confirmed request can include your text, the
+Codex runs as a local process, but requests use the configured model
+provider and are not offline. **Send** authorizes capture and transmission;
+there is no separate disclosure or approval dialog in the game UI.
+A request can include your text, the
 selected area's block IDs and state properties, unknown-cell locations, the
 current accepted plan, and every image still visible in the attachment list.
+When the model asks, Builder can also send bounded pages of local block registry
+IDs/names and one requested block's allowed state values plus a 128×128-or-smaller
+inventory-model preview. These catalog tools inspect no world, inventory,
+containers or files; results and previews are sent to the configured model
+provider only in response to its request.
 The world screenshot is captured before HUD rendering; names or signs visible
 in the world itself can still appear. Reference images are opt-in. Inventory,
 chat, containers and arbitrary block-entity data are not included.
 
-The UI separates preparation from transmission. Review the request context and
-image thumbnails, remove attachments when needed, and confirm only when the
-displayed data is appropriate to send. Cancellation stops the owned request
+Opening the window, applying/restoring bounds and connecting do not send a build
+request. **Cancel request** stops pending preparation or the owned request
 process; a request already accepted by the provider may already have been
 transmitted.
 
@@ -64,10 +74,14 @@ configuration or provider tokens. Builder does not read/copy those stores.
 Review and protect the instance data according to your needs. Do not commit it
 or share it unintentionally.
 
-Builder's isolated policy disables shell/file tools, MCP integrations, plugins,
-apps, hooks, web search, skills/instructions and network access for the model
-thread. It requires the expected read-only sandbox and explicit approval
-policy before a request. Unsupported or uninspectable policy state, missing
+Builder's isolated policy enables the Codex Code Mode host runtime needed to
+route its fixed, read-only local block-catalog tools and pins
+`features.code_mode=false`. The selected model can still require a particular
+tool mode, so the host runtime is available for that protocol. Shell/file
+tools, MCP integrations, plugins, apps, hooks, web search, skills/instructions
+and network access remain disabled for the model thread. It requires the
+expected read-only sandbox and `never` approval policy before a request.
+Unsupported or uninspectable policy state, missing
 login, incompatible model/image capability, stale world state, and unavailable
 world facts are shown as unavailable/errors and block the dependent action.
 No credentials or login are needed in CI; tests use synthetic process frames.

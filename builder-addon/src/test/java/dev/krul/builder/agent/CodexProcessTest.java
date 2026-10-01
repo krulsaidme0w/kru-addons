@@ -2,6 +2,7 @@ package dev.krul.builder.agent;
 
 import com.google.gson.*;
 import dev.krul.builder.model.*;
+import dev.krul.builder.minecraft.MinecraftPlanRules;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -14,6 +15,123 @@ import static org.junit.jupiter.api.Assertions.*;
 
 class CodexProcessTest {
     @TempDir Path temporary;
+
+    @Test void contextIncludesExactGeometryAndConciseDesignQualityRubric() throws Exception {
+        String context = CodexProcess.contextMessage(request());
+        assertTrue(context.contains("bounds.min + proposal coordinate"));
+        assertTrue(context.contains("unknown"));
+        assertTrue(context.contains("not a complete world scan"));
+        assertTrue(context.contains("silhouette"));
+        assertTrue(context.contains("circulation"));
+        assertTrue(context.contains("structural supports"));
+        assertTrue(context.contains("restrained palette"));
+        assertTrue(context.contains("structural supports"));
+        assertTrue(context.contains("inspect_build_plan"));
+        assertTrue(context.contains("at most one critique-driven revision"));
+    }
+
+    @Test void startupPinsPolicyBeforeReadingEffectiveConfiguration() throws Exception {
+        var server = new FakeServer(false);
+        var client = new CodexProcess(temporary, key -> true, "codex", server::launch);
+        var done = new CountDownLatch(1);
+        try {
+            client.start(request(), event -> {
+                if (event instanceof AgentEvent.Completed || event instanceof AgentEvent.Failed) done.countDown();
+            });
+            assertTrue(done.await(5, TimeUnit.SECONDS));
+            Map<String, String> overrides = new HashMap<>();
+            for (int i = 0; i + 1 < server.startupCommand.size(); i++) {
+                if (server.startupCommand.get(i).equals("-c")) {
+                    String[] entry = server.startupCommand.get(++i).split("=", 2);
+                    overrides.put(entry[0], entry[1]);
+                }
+            }
+            assertEquals("\"never\"", overrides.get("approval_policy"));
+            assertEquals("\"read-only\"", overrides.get("sandbox_mode"));
+        } finally { client.close(); }
+    }
+
+    @Test void deviceLoginWaitsForMatchingCompletionAndRevalidatesAccount() throws Exception {
+        var server = new FakeServer(false);
+        server.accountAuthenticated = false;
+        var client = new CodexProcess(temporary, key -> true, "codex", server::launch);
+        var events = new CopyOnWriteArrayList<AgentEvent>();
+        var authenticated = new CountDownLatch(1);
+        try {
+            client.login(event -> { events.add(event); if (event instanceof AgentEvent.Status s && s.login() == AgentClient.Login.AUTHENTICATED) authenticated.countDown(); });
+            assertTrue(authenticated.await(5, TimeUnit.SECONDS), events.toString());
+            assertEquals(2, server.accountReads);
+            assertTrue(events.stream().anyMatch(e -> e instanceof AgentEvent.Status s && s.login() == AgentClient.Login.PENDING && "ABCD-1234".equals(s.userCode())));
+            assertEquals(1, events.stream().filter(e -> e instanceof AgentEvent.Status s && s.login() == AgentClient.Login.AUTHENTICATED).count());
+            assertEquals(0, events.stream().filter(AgentEvent.Failed.class::isInstance).count());
+        } finally { client.close(); }
+    }
+
+    @Test void failedDeviceLoginReportsServerReasonAndReturnsToRequired() throws Exception {
+        var server = new FakeServer(false);
+        server.accountAuthenticated = false;
+        server.loginCompletionSuccess = false;
+        server.loginCompletionError = "Device authorization expired";
+        var client = new CodexProcess(temporary, key -> true, "codex", server::launch);
+        var events = new CopyOnWriteArrayList<AgentEvent>();
+        var failed = new CountDownLatch(1);
+        try {
+            client.login(event -> { events.add(event); if (event instanceof AgentEvent.Failed) failed.countDown(); });
+            assertTrue(failed.await(5, TimeUnit.SECONDS), events.toString());
+            assertTrue(events.stream().anyMatch(e -> e instanceof AgentEvent.Failed f && f.message().contains("Device authorization expired")));
+            assertEquals(AgentClient.Login.REQUIRED, client.status().login());
+            assertEquals(AgentClient.Connection.READY, client.status().connection());
+        } finally { client.close(); }
+    }
+
+    @Test void loginRpcFailureDisconnectsAndRedactsCredentialText() throws Exception {
+        var server = new FakeServer(false);
+        server.accountAuthenticated = false;
+        server.rpcErrorMethod = "account/login/start";
+        server.rpcErrorMessage = "Authorization: Bearer do-not-leak";
+        var client = new CodexProcess(temporary, key -> true, "codex", server::launch);
+        var events = new CopyOnWriteArrayList<AgentEvent>();
+        var failed = new CountDownLatch(1);
+        try {
+            client.login(event -> { events.add(event); if (event instanceof AgentEvent.Failed) failed.countDown(); });
+            assertTrue(failed.await(5, TimeUnit.SECONDS), events.toString());
+            assertEquals(AgentClient.Connection.DISCONNECTED, client.status().connection());
+            assertTrue(events.stream().filter(AgentEvent.Failed.class::isInstance).map(AgentEvent.Failed.class::cast)
+                    .anyMatch(e -> e.message().contains("Codex rejected account/login/start") && e.message().contains("[redacted]")));
+            assertFalse(events.toString().contains("do-not-leak"));
+        } finally { client.close(); }
+    }
+
+    @Test void cancelledLoginRetryAuthenticatesAndIgnoresStaleCompletion() throws Exception {
+        var server = new FakeServer(false);
+        server.accountAuthenticated = false;
+        server.delayLoginCompletion = true;
+        var client = new CodexProcess(temporary, key -> true, "codex", server::launch);
+        var firstEvents = new CopyOnWriteArrayList<AgentEvent>();
+        var secondEvents = new CopyOnWriteArrayList<AgentEvent>();
+        var authenticated = new CountDownLatch(1);
+        try {
+            client.login(firstEvents::add);
+            assertTrue(awaitMethod(server, "account/login/start"));
+            FakeProcess cancelledProcess = server.process;
+            client.cancel();
+
+            server.delayLoginCompletion = false;
+            client.login(event -> { secondEvents.add(event); if (event instanceof AgentEvent.Status s && s.login() == AgentClient.Login.AUTHENTICATED) authenticated.countDown(); });
+            assertTrue(authenticated.await(5, TimeUnit.SECONDS), secondEvents.toString());
+
+            cancelledProcess.send(FakeServer.loginCompleted("login-1", true, null));
+            Thread.sleep(100);
+            assertFalse(firstEvents.stream().anyMatch(e -> e instanceof AgentEvent.Status s && s.login() == AgentClient.Login.AUTHENTICATED));
+            assertEquals(1, secondEvents.stream().filter(e -> e instanceof AgentEvent.Status s && s.login() == AgentClient.Login.AUTHENTICATED).count());
+        } finally { client.close(); }
+    }
+
+    private static boolean awaitMethod(FakeServer server, String method) throws InterruptedException {
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(4);
+        while (!server.methods.contains(method) && System.nanoTime() < deadline) Thread.sleep(10);
+        return server.methods.contains(method);
+    }
 
     @Test void refusesUnsafeEffectiveConfigBeforeCreatingThreadOrSendingTurn() throws Exception {
         var server = new FakeServer(true);
@@ -46,8 +164,78 @@ class CodexProcessTest {
         assertTrue(server.turnParams.getAsJsonArray("runtimeWorkspaceRoots").isEmpty());
         assertTrue(events.stream().anyMatch(e -> e instanceof AgentEvent.Completed c && c.message().equals("A discussion answer")));
         assertFalse(events.stream().anyMatch(AgentEvent.Proposal.class::isInstance));
-        assertFalse(events.stream().anyMatch(AgentEvent.TextDelta.class::isInstance));
+        assertTrue(events.stream().anyMatch(e -> e instanceof AgentEvent.TextDelta d && d.text().contains("working")));
+        assertTrue(events.stream().anyMatch(e -> e instanceof AgentEvent.TextDelta d && d.text().contains("Checking response")));
+        String prompt = server.turnParams.getAsJsonArray("input").get(0).getAsJsonObject().get("text").getAsString();
+        assertTrue(prompt.contains("block-entity NBT"));
+        assertTrue(prompt.contains("plan=null"));
         client.close();
+    }
+
+    @Test void registersAndAnswersOnlyCurrentDynamicToolCall() throws Exception {
+        var server = new FakeServer(false); server.sendCatalogCall = true; server.sendStaleCatalogCall = true;
+        var calls = new CopyOnWriteArrayList<String>();
+        var tools = new BuilderDynamicTools((name, args, current) -> { calls.add(name); return textToolResult("local catalog page"); });
+        var client = new CodexProcess(temporary, key -> true, "codex", server::launch, tools);
+        var done = new CountDownLatch(1);
+        var events = new CopyOnWriteArrayList<AgentEvent>();
+        try {
+            client.start(request(), event -> { events.add(event); if (event instanceof AgentEvent.Completed) done.countDown(); });
+            assertTrue(done.await(5, TimeUnit.SECONDS));
+            assertEquals(4, server.threadParams.getAsJsonArray("dynamicTools").size());
+            assertEquals(List.of("list_block_mods"), calls);
+            assertEquals(Boolean.TRUE, server.toolReplies.get(881).getAsJsonObject("result").get("success").getAsBoolean());
+            assertEquals(Boolean.FALSE, server.toolReplies.get(882).getAsJsonObject("result").get("success").getAsBoolean());
+            assertTrue(events.stream().anyMatch(e -> e instanceof AgentEvent.TextDelta d && d.text().contains("block catalog")));
+        } finally { client.close(); }
+    }
+
+    @Test void reportsLocalCatalogToolFailureWithoutExposingRawToolOutput() throws Exception {
+        var server = new FakeServer(false); server.sendCatalogCall = true;
+        var tools = new BuilderDynamicTools((name, args, current) -> { throw new IOException("local path secret"); });
+        var client = new CodexProcess(temporary, key -> true, "codex", server::launch, tools);
+        var events = new CopyOnWriteArrayList<AgentEvent>();
+        var done = new CountDownLatch(1);
+        try {
+            client.start(request(), event -> { events.add(event); if (event instanceof AgentEvent.Completed) done.countDown(); });
+            assertTrue(done.await(5, TimeUnit.SECONDS), events.toString());
+            assertTrue(events.stream().anyMatch(e -> e instanceof AgentEvent.TextDelta d && d.text().contains("lookup failed")));
+            assertFalse(events.toString().contains("local path secret"));
+            assertEquals(Boolean.FALSE, server.toolReplies.get(881).getAsJsonObject("result").get("success").getAsBoolean());
+        } finally { client.close(); }
+    }
+
+    @Test void reportsAnInterruptedTurnAsFailureInsteadOfACompletedResponse() throws Exception {
+        var server = new FakeServer(false); server.turnStatus = "interrupted";
+        var client = new CodexProcess(temporary, key -> true, "codex", server::launch);
+        var events = new CopyOnWriteArrayList<AgentEvent>();
+        var done = new CountDownLatch(1);
+        try {
+            client.start(request(), event -> { events.add(event); if (event instanceof AgentEvent.Failed) done.countDown(); });
+            assertTrue(done.await(5, TimeUnit.SECONDS), events.toString());
+            assertTrue(events.stream().anyMatch(e -> e instanceof AgentEvent.Failed f && f.message().contains("interrupted")));
+            assertFalse(events.stream().anyMatch(AgentEvent.Completed.class::isInstance));
+        } finally { client.close(); }
+    }
+
+    @Test void invalidContainerProposalKeepsCodexConnectionReady() throws Exception {
+        var server = new FakeServer(false);
+        server.agentMessageText = "{\"message\":\"Here is the storage plan\",\"plan\":{}}";
+        var client = new CodexProcess(temporary, key -> true, "codex", server::launch);
+        var events = new CopyOnWriteArrayList<AgentEvent>();
+        var done = new CountDownLatch(1);
+        try {
+            client.start(request(), event -> { events.add(event); if (event instanceof AgentEvent.Failed) done.countDown(); });
+            assertTrue(done.await(5, TimeUnit.SECONDS), events.toString());
+            assertTrue(events.stream().anyMatch(e -> e instanceof AgentEvent.Failed f && f.message().contains("rejected the proposal")), events.toString());
+            assertEquals(AgentClient.Connection.READY, client.status().connection());
+            assertFalse(events.stream().anyMatch(AgentEvent.Proposal.class::isInstance));
+        } finally { client.close(); }
+    }
+
+    private static JsonObject textToolResult(String value) {
+        JsonObject item = new JsonObject(); item.addProperty("type", "inputText"); item.addProperty("text", value);
+        JsonArray items = new JsonArray(); items.add(item); JsonObject result = new JsonObject(); result.addProperty("success", true); result.add("contentItems", items); return result;
     }
 
     @Test void reusesTheOwnedProcessAndThreadForTheSameProjectSession() throws Exception {
@@ -173,17 +361,28 @@ class CodexProcessTest {
         final Set<String> methods = ConcurrentHashMap.newKeySet();
         final boolean unsafe;
         volatile int versionChecks;
+        volatile List<String> startupCommand = List.of();
         volatile Path appCwd;
         volatile boolean foreignNotifications, delayCompletion, unsupportedRequestRejected;
+        volatile boolean accountAuthenticated = true, loginCompletionSuccess = true, delayLoginCompletion;
+        volatile String loginCompletionError;
+        volatile String agentMessageText = "{\"message\":\"A discussion answer\",\"plan\":null}";
+        volatile String rpcErrorMethod, rpcErrorMessage;
+        volatile int accountReads, loginStarts;
         volatile boolean responseHasWorkspaceRoot;
+        volatile boolean sendCatalogCall;
+        volatile boolean sendStaleCatalogCall;
+        final Map<Integer,JsonObject> toolReplies = new ConcurrentHashMap<>();
         volatile boolean omitDefaultThreadFields = true;
         volatile String failAfterMethod;
+        volatile String turnStatus = "completed";
         volatile boolean failureIsEof;
         volatile JsonObject threadParams, turnParams;
         volatile FakeProcess process;
         FakeServer(boolean unsafe) { this.unsafe = unsafe; }
         Process launch(List<String> command, Path cwd, Map<String, String> env) throws IOException {
             if (command.contains("--version")) { versionChecks++; return FakeProcess.completed("codex-cli 0.153.4\n"); }
+            startupCommand = List.copyOf(command);
             appCwd = cwd;
             process = new FakeProcess(line -> handle(line));
             return process;
@@ -193,9 +392,11 @@ class CodexProcessTest {
             String method = request.has("method") ? request.get("method").getAsString() : "";
             if (method.isEmpty()) {
                 if (request.has("error")) unsupportedRequestRejected = true;
+                if (request.has("result") && request.has("id")) toolReplies.put(request.get("id").getAsInt(), request.deepCopy());
                 return "";
             }
             methods.add(method);
+            if (method.equals(rpcErrorMethod) && request.has("id")) return error(request.get("id"), rpcErrorMessage);
             if (method.equals(failAfterMethod) && process != null) {
                 process.malformedAfterResponse = !failureIsEof;
                 process.closeAfterResponse = failureIsEof;
@@ -207,7 +408,21 @@ class CodexProcessTest {
                     JsonObject policy = config(unsafe); result.add("config", policy); result.add("layers", new JsonArray());
                 }
                 case "account/read" -> {
-                    JsonObject account = new JsonObject(); account.addProperty("type", "chatgpt"); result.add("account", account);
+                    accountReads++;
+                    if (accountAuthenticated) { JsonObject account = new JsonObject(); account.addProperty("type", "chatgpt"); result.add("account", account); }
+                }
+                case "model/list" -> {
+                    JsonObject model = new JsonObject(); model.addProperty("isDefault", true); JsonArray modalities = new JsonArray(); modalities.add("text"); modalities.add("image"); model.add("inputModalities", modalities);
+                    JsonArray data = new JsonArray(); data.add(model); result.add("data", data);
+                }
+                case "account/login/start" -> {
+                    int attempt = ++loginStarts;
+                    result.addProperty("type", "chatgptDeviceCode"); result.addProperty("loginId", "login-" + attempt);
+                    result.addProperty("verificationUrl", "https://example.test/device"); result.addProperty("userCode", "ABCD-1234");
+                    if (!delayLoginCompletion && loginCompletionSuccess) accountAuthenticated = true;
+                    String completion = delayLoginCompletion ? "" : loginCompleted("login-" + attempt, loginCompletionSuccess, loginCompletionError);
+                    String foreign = loginCompleted("different-login", true, null);
+                    return response(id, result) + foreign + completion;
                 }
                 case "thread/start" -> {
                     threadParams = request.getAsJsonObject("params").deepCopy();
@@ -231,9 +446,9 @@ class CodexProcessTest {
                     turnParams = request.getAsJsonObject("params").deepCopy();
                     JsonObject turn = new JsonObject(); turn.addProperty("id", "turn-1"); result.add("turn", turn);
                     if (delayCompletion) return response(id, result);
-                    JsonObject item = new JsonObject(); item.addProperty("type", "agentMessage"); item.addProperty("text", "{\"message\":\"A discussion answer\",\"plan\":null}");
+                    JsonObject item = new JsonObject(); item.addProperty("type", "agentMessage"); item.addProperty("text", agentMessageText);
                     JsonObject completed = new JsonObject(); completed.addProperty("threadId", "thread-1"); completed.addProperty("turnId", "turn-1"); completed.add("item", item);
-                    JsonObject turnCompleted = new JsonObject(); turnCompleted.addProperty("id", "turn-1"); turnCompleted.addProperty("status", "completed");
+                    JsonObject turnCompleted = new JsonObject(); turnCompleted.addProperty("id", "turn-1"); turnCompleted.addProperty("status", turnStatus);
                     JsonObject turnParams = new JsonObject(); turnParams.addProperty("threadId", "thread-1"); turnParams.add("turn", turnCompleted);
                     String foreign = "";
                     if (foreignNotifications) {
@@ -243,7 +458,18 @@ class CodexProcessTest {
                         JsonObject tool = new JsonObject(); tool.addProperty("id", 990); tool.addProperty("method", "execCommand"); tool.add("params", new JsonObject());
                         foreign = tool + "\n" + notification("item/completed", wrongItem) + notification("turn/completed", wrongTurnParams);
                     }
-                    return response(id, result) + foreign + notification("item/completed", completed) + notification("turn/completed", turnParams);
+                    String toolCall = "";
+                    if (sendCatalogCall) {
+                        JsonObject args = new JsonObject(); args.addProperty("page", 0);
+                        JsonObject call = new JsonObject(); call.addProperty("callId", "tool-call-1"); call.addProperty("threadId", "thread-1"); call.addProperty("turnId", "turn-1"); call.addProperty("tool", "list_block_mods"); call.add("arguments", args);
+                        JsonObject frame = new JsonObject(); frame.addProperty("id", 881); frame.addProperty("method", "item/tool/call"); frame.add("params", call); toolCall = frame + "\n";
+                    }
+                    if (sendStaleCatalogCall) {
+                        JsonObject args = new JsonObject(); args.addProperty("page", 0);
+                        JsonObject call = new JsonObject(); call.addProperty("callId", "tool-call-stale"); call.addProperty("threadId", "thread-1"); call.addProperty("turnId", "old-turn"); call.addProperty("tool", "list_block_mods"); call.add("arguments", args);
+                        JsonObject frame = new JsonObject(); frame.addProperty("id", 882); frame.addProperty("method", "item/tool/call"); frame.add("params", call); toolCall += frame + "\n";
+                    }
+                    return response(id, result) + foreign + toolCall + notification("item/completed", completed) + notification("turn/completed", turnParams);
                 }
                 default -> { }
             }
@@ -251,7 +477,8 @@ class CodexProcessTest {
         }
         private static JsonObject config(boolean unsafe) {
             JsonObject result = new JsonObject(), features = new JsonObject();
-            for (String k : List.of("hooks", "plugins", "apps", "multi_agent", "code_mode", "code_mode_host", "image_generation", "memories")) features.addProperty(k, unsafe && k.equals("plugins"));
+            for (String k : List.of("hooks", "plugins", "apps", "multi_agent", "code_mode", "image_generation", "memories")) features.addProperty(k, unsafe && k.equals("plugins"));
+            features.addProperty("code_mode_host", true);
             result.add("features", features); result.addProperty("web_search", "disabled");
             result.addProperty("approval_policy", "never"); result.addProperty("sandbox_mode", "read-only");
             result.add("notify", new JsonArray()); JsonObject skills = new JsonObject(); skills.addProperty("include_instructions", false);
@@ -262,7 +489,16 @@ class CodexProcessTest {
         }
         static JsonObject configReadResult(boolean unsafe) { JsonObject result = new JsonObject(); result.add("config", config(unsafe)); result.add("layers", new JsonArray()); return result; }
         static String response(JsonElement id, JsonObject result) { JsonObject frame = new JsonObject(); frame.add("id", id); frame.add("result", result); return frame + "\n"; }
+        static String error(JsonElement id, String message) {
+            JsonObject error = new JsonObject(); error.addProperty("code", -32000); error.addProperty("message", message);
+            JsonObject frame = new JsonObject(); frame.add("id", id); frame.add("error", error); return frame + "\n";
+        }
         private static String notification(String method, JsonObject params) { JsonObject frame = new JsonObject(); frame.addProperty("method", method); frame.add("params", params); return frame + "\n"; }
+        static String loginCompleted(String loginId, boolean success, String error) {
+            JsonObject params = new JsonObject(); params.addProperty("loginId", loginId); params.addProperty("success", success);
+            if (error != null) params.addProperty("error", error);
+            return notification("account/login/completed", params);
+        }
         void sendLateProposal() throws IOException {
             if (process == null) return;
             JsonObject item = new JsonObject(); item.addProperty("type", "agentMessage");

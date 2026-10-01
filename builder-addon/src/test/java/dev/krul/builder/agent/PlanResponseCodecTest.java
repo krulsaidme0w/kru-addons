@@ -46,6 +46,19 @@ class PlanResponseCodecTest {
         assertThrows(Exception.class, () -> CODEC.decode(VALID, request(), key -> false));
     }
 
+    @Test void reportsTheExactCellWhenTwoOperationsAssignDifferentStatesInOneStage() {
+        String conflict = """
+            {"message":"bad plan","plan":{"revision":2,"palette":[
+              {"key":"stone","state":{"id":"minecraft:stone","properties":[]}},
+              {"key":"dirt","state":{"id":"minecraft:dirt","properties":[]}}],
+              "stages":[{"id":"base","title":"Base","after":[],"operations":[
+                {"op":"block","position":[1,0,0],"state":"stone"},
+                {"op":"fill","min":[0,0,0],"max":[2,0,0],"state":"dirt"}]}]}}
+            """;
+        Exception error = assertThrows(Exception.class, () -> CODEC.decode(conflict, request(), key -> true));
+        assertTrue(error.getMessage().contains("Conflicting assignments within stage 'base' at [1,0,0]"), error.getMessage());
+    }
+
     @Test void rejectsUnknownFieldsMalformedJsonAndOversizedFill() {
         assertThrows(Exception.class, () -> CODEC.decode("{\"message\":\"ok\",\"plan\":null,\"tool\":\"run\"}", request(), key -> true));
         assertThrows(Exception.class, () -> CODEC.decode("{bad}", request(), key -> true));

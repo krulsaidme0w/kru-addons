@@ -4,6 +4,8 @@ import meteordevelopment.meteorclient.MeteorClient;
 import meteordevelopment.meteorclient.events.render.Render2DEvent;
 import meteordevelopment.meteorclient.events.render.Render3DEvent;
 import meteordevelopment.meteorclient.events.world.TickEvent;
+import meteordevelopment.meteorclient.events.world.BlockActivateEvent;
+import meteordevelopment.meteorclient.events.game.OpenScreenEvent;
 import net.minecraft.registry.Registries;
 import net.minecraft.entity.Entity;
 import meteordevelopment.meteorclient.renderer.Renderer2D;
@@ -57,6 +59,10 @@ import java.util.Map;
 import java.util.HashMap;
 import java.util.function.LongSupplier;
 import net.minecraft.block.entity.BlockEntity;
+import net.minecraft.client.gui.screen.ingame.GenericContainerScreen;
+import net.minecraft.util.hit.BlockHitResult;
+import net.minecraft.util.hit.HitResult;
+import dev.krul.cobblemon.dungeon.OpenedChestCache;
 
 /** Separate, read-only loaded-world evidence collector for dungeon runs. */
 public final class DungeonDiscovery extends Module {
@@ -73,6 +79,7 @@ public final class DungeonDiscovery extends Module {
         .defaultValue("academy-example.json").onChanged(value -> reloadProfile()).build());
     private Lifecycle lifecycle;
     private final DungeonRenderCache renderCache = new DungeonRenderCache();
+    private final OpenedChestCache openedChests = new OpenedChestCache();
     private final DungeonPerformance performance = new DungeonPerformance();
     private Object observedWorld;
     private String observedDimension = "";
@@ -161,6 +168,7 @@ public final class DungeonDiscovery extends Module {
     @Override
     public void onActivate() {
         renderCache.clear();
+        openedChests.clear();
         performance.clear();
         observedWorld=mc.world;
         observedDimension = "";
@@ -178,6 +186,7 @@ public final class DungeonDiscovery extends Module {
     @Override
     public void onDeactivate() {
         renderCache.clear();
+        openedChests.clear();
         performance.clear();
         if (lifecycle != null) lifecycle.deactivate();
         observedWorld=null;
@@ -192,6 +201,7 @@ public final class DungeonDiscovery extends Module {
         if (observedWorld != mc.world) {
             observedWorld = mc.world;
             renderCache.clear();
+            openedChests.clear();
             targetEntities.clear();
             observedDimension = "";
             if (lifecycle != null) lifecycle.worldChanged();
@@ -201,12 +211,48 @@ public final class DungeonDiscovery extends Module {
         if (!dimension.equals(observedDimension)) {
             observedDimension = dimension;
             renderCache.clear();
+            openedChests.beginDimension(dimension);
         }
         tick++;
         if (lifecycle != null) lifecycle.tick(tick, dimension);
         performance.record(DungeonPerformance.Phase.TICK, System.nanoTime() - started);
         performance.report(System.nanoTime()).ifPresent(line -> MeteorClient.LOG.info(line + " targets="
             + getInfoString() + " fps=" + mc.getCurrentFps()));
+    }
+
+    @EventHandler
+    private void onBlockActivate(BlockActivateEvent event) {
+        if (mc.world == null || mc.player == null || !(mc.crosshairTarget instanceof BlockHitResult hit)
+            || hit.getType() != HitResult.Type.BLOCK) {
+            openedChests.cancelPending();
+            return;
+        }
+        var position = hit.getBlockPos();
+        if (!mc.world.getBlockState(position).equals(event.blockState)) {
+            openedChests.cancelPending();
+            return;
+        }
+        BlockEntity blockEntity = mc.world.getBlockEntity(position);
+        if (blockEntity == null) {
+            openedChests.cancelPending();
+            return;
+        }
+        String dimension = mc.world.getRegistryKey().getValue().toString();
+        String registryId = Registries.BLOCK_ENTITY_TYPE.getId(blockEntity.getType()).toString();
+        var observation = new DungeonObservation(DungeonObservation.Kind.BLOCK_ENTITY, dimension,
+            dimension + "|block-entity|" + registryId + "|" + position, registryId,
+            blockEntity.getClass().getName(), "", position, Map.of(), System.currentTimeMillis());
+        boolean chest = DungeonRenderSelector.classify(observation, 0, profileStore.current())
+            .map(target -> target.categoryId().equalsIgnoreCase("chest")).orElse(false);
+        if (chest) openedChests.noteActivation(dimension, position, tick);
+        else openedChests.cancelPending();
+    }
+
+    @EventHandler
+    private void onOpenScreen(OpenScreenEvent event) {
+        if (event.screen instanceof GenericContainerScreen && mc.world != null)
+            openedChests.containerOpened(mc.world.getRegistryKey().getValue().toString(), tick);
+        else openedChests.cancelPending();
     }
 
     @EventHandler
@@ -295,18 +341,18 @@ public final class DungeonDiscovery extends Module {
             categoryEnabled(profile, "POKE_BALL", "poke_ball"), categoryEnabled(profile, "WEAPON", "weapon"),
             categoryEnabled(profile, "GUARDIAN", "guardian"), categoryEnabled(profile, "STRONG_POKEMON", "strong_pokemon"), true);
         int visualRange = profile.settings().visualRange();
-        return renderCache.get(tick, mc.world, new RenderOptions(dimension, visualRange, filters), () -> {
+        return renderCache.get(tick, mc.world, new RenderOptions(dimension, visualRange, filters, openedChests.size()), () -> {
             long started = System.nanoTime();
             long now = System.currentTimeMillis();
             var selected = DungeonRenderSelector.select(loadedTargets(dimension, now), dimension,
                 now, Long.MAX_VALUE,
-                mc.player.getX(), mc.player.getY(), mc.player.getZ(), visualRange, filters, profile);
+                mc.player.getX(), mc.player.getY(), mc.player.getZ(), visualRange, filters, profile, openedChests);
             performance.record(DungeonPerformance.Phase.SELECT, System.nanoTime() - started);
             return selected;
         });
     }
 
-    private record RenderOptions(String dimension, int range, DungeonTargetFilters filters) {}
+    private record RenderOptions(String dimension, int range, DungeonTargetFilters filters, int openedCount) {}
 
     private RuleCategory visual(String categoryId) {
         return profileStore.current().categories().stream()

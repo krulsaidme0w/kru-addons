@@ -19,12 +19,13 @@ public final class CodexIsolation {
     private static final Set<String> LAYER_TYPES = Set.of("packagedDefaults", "user", "sessionFlags",
         "system", "mdm", "enterpriseManaged", "legacyManagedConfigTomlFromFile",
         "legacyManagedConfigTomlFromMdm");
-    private static final List<String> DISABLES = List.of(
+    private static final List<String> CONFIG_OVERRIDES = List.of(
         "features.hooks=false", "features.plugins=false", "features.apps=false",
         "features.multi_agent=false", "features.image_generation=false", "features.code_mode=false",
-        "features.code_mode_host=false", "features.memories=false", "skills.include_instructions=false",
+        "features.code_mode_host=true", "features.memories=false", "skills.include_instructions=false",
         "skills.bundled.enabled=false", "orchestrator.skills.enabled=false", "notify=[]",
-        "web_search=\"disabled\"", "project_doc_max_bytes=0");
+        "web_search=\"disabled\"", "project_doc_max_bytes=0",
+        "approval_policy=\"never\"", "sandbox_mode=\"read-only\"");
 
     private CodexIsolation() {}
 
@@ -73,7 +74,7 @@ public final class CodexIsolation {
 
     public static List<String> arguments() {
         var args = new ArrayList<String>(List.of("app-server", "--stdio", "--strict-config"));
-        for (String disable : DISABLES) { args.add("-c"); args.add(disable); }
+        for (String override : CONFIG_OVERRIDES) { args.add("-c"); args.add(override); }
         return List.copyOf(args);
     }
 
@@ -100,7 +101,8 @@ public final class CodexIsolation {
         if (config == null) throw new IncompatibleException("Codex effective configuration is unavailable");
         JsonObject features = object(config, "features");
         for (String feature : List.of("hooks", "plugins", "apps", "multi_agent", "code_mode",
-                "code_mode_host", "image_generation", "memories")) requireBoolean(features, feature, false);
+                "image_generation", "memories")) requireBoolean(features, feature, false);
+        requireBoolean(features, "code_mode_host", true);
         requireString(config, "web_search", "disabled");
         requireString(config, "approval_policy", "never");
         requireString(config, "sandbox_mode", "read-only");
@@ -119,8 +121,12 @@ public final class CodexIsolation {
         for (String field : List.of("model_provider", "openai_base_url", "chatgpt_base_url", "model_instructions_file",
                 "instructions", "developer_instructions", "compact_prompt")) {
             JsonElement value = config.get(field);
+            // Native Windows CLI serializes its built-in endpoint instead of null.
+            if (field.equals("chatgpt_base_url") && value != null && value.isJsonPrimitive()
+                    && value.getAsJsonPrimitive().isString()
+                    && Set.of("https://chatgpt.com/backend-api/", "https://chatgpt.com/backend-api").contains(value.getAsString())) continue;
             if (value != null && !value.isJsonNull() && !(value.isJsonPrimitive() && value.getAsString().isBlank()))
-                throw new IncompatibleException("Custom Codex provider or instruction override is not allowed");
+                throw new IncompatibleException("Custom Codex provider or instruction override is not allowed: " + field);
         }
         for (String field : List.of("hooks", "plugins")) {
             JsonElement value = config.get(field);

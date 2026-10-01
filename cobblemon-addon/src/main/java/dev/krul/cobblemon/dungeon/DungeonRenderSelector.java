@@ -21,6 +21,11 @@ public final class DungeonRenderSelector {
     public static List<DungeonRenderTarget> select(List<DungeonObservation> observations, String dimension,
         long now, long freshnessMillis, double x, double y, double z, double maximumDistance,
         DungeonTargetFilters filters, RuleProfile profile) {
+        return select(observations, dimension, now, freshnessMillis, x, y, z, maximumDistance, filters, profile, null);
+    }
+    public static List<DungeonRenderTarget> select(List<DungeonObservation> observations, String dimension,
+        long now, long freshnessMillis, double x, double y, double z, double maximumDistance,
+        DungeonTargetFilters filters, RuleProfile profile, OpenedChestCache openedChests) {
         if (observations == null || dimension == null) return List.of();
         List<DungeonRenderTarget> targets = new ArrayList<>();
         for (DungeonObservation observation : observations) {
@@ -29,6 +34,8 @@ public final class DungeonRenderSelector {
             double distanceSquared = observation.position().getSquaredDistance(x, y, z);
             if (distanceSquared > maximumDistance * maximumDistance) continue;
             classify(observation, Math.sqrt(distanceSquared), profile)
+                .filter(target -> openedChests == null || !isChest(target.categoryId())
+                    || !openedChests.isOpen(dimension, observation.position()))
                 .filter(target -> profile.categories().stream()
                     .filter(category -> category.id().equals(target.categoryId()))
                     .findFirst().map(category -> target.distance() <= category.maxDistance()).orElse(false))
@@ -38,6 +45,7 @@ public final class DungeonRenderSelector {
         targets.sort(Comparator.comparingDouble(DungeonRenderTarget::distance).thenComparing(DungeonRenderTarget::identity));
         return List.copyOf(targets);
     }
+    private static boolean isChest(String categoryId) { return categoryId.equals("chest") || categoryId.equals("CHEST"); }
     public static Optional<DungeonRenderTarget> classify(DungeonObservation observation, double distance) {
         return classify(observation, distance, RuleProfile.disabled());
     }

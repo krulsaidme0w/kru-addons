@@ -12,7 +12,10 @@ public sealed interface AgentEvent permits AgentEvent.Status, AgentEvent.TextDel
         public Status { Objects.requireNonNull(connection); Objects.requireNonNull(login); }
     }
     record TextDelta(String text) implements AgentEvent { public TextDelta { Objects.requireNonNull(text); } }
-    record Proposal(BuildPlan plan) implements AgentEvent { public Proposal { Objects.requireNonNull(plan); } }
+    record Proposal(BuildPlan plan, boolean visualReviewed, String reviewFailure) implements AgentEvent {
+        public Proposal(BuildPlan plan) { this(plan, false, "Plan preview was not inspected"); }
+        public Proposal { Objects.requireNonNull(plan); reviewFailure = reviewFailure == null || reviewFailure.isBlank() ? null : reviewFailure; }
+    }
     record Failed(String message) implements AgentEvent { public Failed { Objects.requireNonNull(message); } }
     record Completed(String message) implements AgentEvent { public Completed { Objects.requireNonNull(message); } }
 }
