@@ -1,0 +1,29 @@
+plugins {
+    id 'java'
+    id 'application'
+    id 'com.gradleup.shadow' version '8.3.6'
+}
+
+group = 'dev.krul.builder'
+version = '0.1.0'
+
+repositories { mavenCentral() }
+
+dependencies {
+    implementation 'io.modelcontextprotocol.sdk:mcp:2.0.1'
+    implementation 'com.google.code.gson:gson:2.11.0'
+    testImplementation platform('org.junit:junit-bom:5.10.2')
+    testImplementation 'org.junit.jupiter:junit-jupiter'
+}
+
+java { toolchain.languageVersion = JavaLanguageVersion.of(21) }
+tasks.withType(JavaCompile).configureEach { options.encoding = 'UTF-8'; options.release = 21 }
+application { mainClass = 'dev.krul.builder.mcp.BuilderMcpServer' }
+test { useJUnitPlatform() }
+
+shadowJar {
+    archiveBaseName = 'builder-mcp-server'
+    archiveClassifier = ''
+    mergeServiceFiles()
+    manifest { attributes('Main-Class': application.mainClass.get()) }
+}
