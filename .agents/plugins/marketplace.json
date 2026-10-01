@@ -8,7 +8,7 @@
       "name": "builder-minecraft",
       "source": {
         "source": "local",
-        "path": "./plugins/builder-minecraft"
+        "path": "./.agents/plugins/plugins/builder-minecraft"
       },
       "policy": {
         "installation": "AVAILABLE",
