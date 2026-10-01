@@ -46,6 +46,25 @@ public final class BuilderMcpServer {
                 String body = "worldGeneration=" + result.worldGeneration() + " snapshotRevision=" + result.snapshotRevision() + "\n" + result.payload();
                 return textResult(body, !result.ok());
             }));
+        tools.add(tool("list_block_mods", "List active block-registry namespaces by page. Never returns the whole block registry.", pageSchema(), true,
+            (exchange, request) -> {
+                BridgeClient.BridgeReply result = bridge.listBlockMods(integer(request.arguments(), "page"));
+                return textResult("Active block namespaces · page " + request.arguments().get("page") + "\n" + result.payload(), !result.ok());
+            }));
+        tools.add(tool("search_blocks", "Search exact local block IDs and localized labels. Results are limited to 20 entries; use the next page for more.", searchSchema(), true,
+            (exchange, request) -> {
+                Map<String, Object> args = request.arguments();
+                String namespace = args.get("namespace") == null ? null : args.get("namespace").toString();
+                BridgeClient.BridgeReply result = bridge.searchBlocks(args.get("query").toString(), namespace, integer(args, "page"));
+                return textResult("Modded block search\n" + result.payload(), !result.ok());
+            }));
+        tools.add(tool("describe_block", "Describe one exact block ID, its legal block-state properties, and one actual Minecraft-rendered inventory-default preview.", describeSchema(), true,
+            (exchange, request) -> {
+                BridgeClient.BlockDescription result = bridge.describeBlock(request.arguments().get("id").toString());
+                return McpSchema.CallToolResult.builder().content(List.of(
+                    McpSchema.TextContent.builder(result.metadata().payload()).build(),
+                    McpSchema.ImageContent.builder(Base64.getEncoder().encodeToString(result.png()), "image/png").build())).isError(false).build();
+            }));
         tools.add(tool("capture_view", "Capture the current Minecraft framebuffer view without moving the camera. Returns the PNG to the model.", identitySchema(), true,
             (exchange, request) -> {
                 Map<String, Object> args = request.arguments();
@@ -88,6 +107,17 @@ public final class BuilderMcpServer {
     }
     private static Map<String, Object> identitySchema() {
         return objectSchema(Map.of("worldGeneration", integerSchema(), "snapshotRevision", integerSchema()), "worldGeneration", "snapshotRevision");
+    }
+    private static Map<String, Object> pageSchema() {
+        return objectSchema(Map.of("page", Map.of("type", "integer", "minimum", 0, "maximum", BridgeClient.MAX_CATALOG_PAGE)), "page");
+    }
+    private static Map<String, Object> searchSchema() {
+        return objectSchema(Map.of("query", Map.of("type", "string", "maxLength", 128),
+            "namespace", Map.of("anyOf", List.of(Map.of("type", "string", "maxLength", 128), Map.of("type", "null"))),
+            "page", Map.of("type", "integer", "minimum", 0, "maximum", BridgeClient.MAX_CATALOG_PAGE)), "query", "namespace", "page");
+    }
+    private static Map<String, Object> describeSchema() {
+        return objectSchema(Map.of("id", Map.of("type", "string", "maxLength", 256, "pattern", "^[a-z0-9_.-]+:[a-z0-9_./-]+$")), "id");
     }
     private static Map<String, Object> selectionSchema() {
         Map<String, Object> coordinate = objectSchema(Map.of("x", Map.of("type", "integer"),

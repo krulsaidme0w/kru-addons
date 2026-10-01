@@ -15,10 +15,17 @@ public final class BridgeProtocol {
     private static final Gson GSON = new Gson();
     private BridgeProtocol() {}
 
-    public enum Method { STATUS, READ_SELECTION, CAPTURE_VIEW, PAIR }
+    public enum Method { STATUS, READ_SELECTION, CAPTURE_VIEW, LIST_BLOCK_MODS, SEARCH_BLOCKS, DESCRIBE_BLOCK, PAIR }
 
     public record Request(int version, String id, Method method, Bounds bounds, int page, int pageSize,
-                          long expectedWorldGeneration, long expectedSnapshotRevision, String token) {}
+                          long expectedWorldGeneration, long expectedSnapshotRevision, String query,
+                          String namespace, String blockId, String token) {
+        public Request(int version, String id, Method method, Bounds bounds, int page, int pageSize,
+                       long expectedWorldGeneration, long expectedSnapshotRevision, String token) {
+            this(version, id, method, bounds, page, pageSize, expectedWorldGeneration, expectedSnapshotRevision,
+                null, null, null, token);
+        }
+    }
 
     /** Payload/image fields are transport strings so this DTO never depends on game or MCP classes. */
     public record Response(int version, String id, boolean ok, long worldGeneration,
@@ -32,7 +39,7 @@ public final class BridgeProtocol {
         try {
             JsonObject object = JsonParser.parseString(json).getAsJsonObject();
             fields(object, Set.of("version", "id", "method", "bounds", "page", "pageSize",
-                "expectedWorldGeneration", "expectedSnapshotRevision", "token"));
+                "expectedWorldGeneration", "expectedSnapshotRevision", "query", "namespace", "blockId", "token"));
             Request request = GSON.fromJson(object, Request.class);
             if (request.version() != VERSION) throw new IllegalArgumentException("Unsupported bridge protocol version");
             if (request.id() == null || request.id().isBlank() || request.id().length() > 128 || request.method() == null

@@ -30,5 +30,13 @@ class BlockCatalogTest {
         assertThrows(IllegalArgumentException.class, () -> catalog.listMods(-1));
         assertThrows(IllegalArgumentException.class, () -> catalog.listMods(10_001));
     }
+    @Test void exactDescriptionIncludesVerifiedDefaultStateAndBlockEntityCapability() {
+        var entry = new BlockCatalog.BlockEntry("demo:chest", "demo", "Chest", Map.of("facing", List.of("north", "south")), Map.of("facing", "north"), true);
+        var detail = new BlockCatalog(List.of(entry)).describe("demo:chest").orElseThrow();
+        assertEquals(Map.of("facing", "north"), detail.defaultState());
+        assertTrue(detail.hasBlockEntity());
+        assertThrows(IllegalArgumentException.class, () -> new BlockCatalog.BlockEntry("demo:x", "demo", "x",
+            Map.of("axis", List.of("x", "y")), Map.of("axis", "z"), false));
+    }
     private static BlockCatalog.BlockEntry entry(String namespace,String path,String name,Map<String,List<String>> properties) { return new BlockCatalog.BlockEntry(namespace+":"+path,namespace,name,properties); }
 }

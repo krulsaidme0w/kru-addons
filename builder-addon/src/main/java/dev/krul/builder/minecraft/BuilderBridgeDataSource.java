@@ -2,6 +2,10 @@ package dev.krul.builder.minecraft;
 
 import com.google.gson.JsonObject;
 import dev.krul.builder.bridge.*;
+import dev.krul.builder.catalog.BlockCatalog;
+import dev.krul.builder.catalog.BlockCatalogFingerprint;
+import dev.krul.builder.catalog.BlockCatalogSnapshotCodec;
+import dev.krul.builder.catalog.BlockCatalogStore;
 import dev.krul.builder.model.Bounds;
 import dev.krul.builder.model.WorldSnapshot;
 import net.minecraft.client.MinecraftClient;
@@ -27,6 +31,11 @@ public final class BuilderBridgeDataSource implements BridgeDataSource {
     private final Supplier<String> worldIdentity;
     private final WorldCapture capture;
     private final Executor io;
+    private final ClientBlockCatalog blockCatalog;
+    private final BlockPreviewRenderer blockPreviews;
+    private final BlockCatalogStore catalogStore;
+    private volatile String persistedCatalogFingerprint;
+    private final java.util.concurrent.atomic.AtomicLong catalogSaveGeneration = new java.util.concurrent.atomic.AtomicLong();
 
     public BuilderBridgeDataSource(MinecraftClient client, Supplier<Optional<WorldSnapshot>> snapshots,
                                    Supplier<Optional<Bounds>> selection, LongSupplier worldGeneration,
@@ -35,6 +44,19 @@ public final class BuilderBridgeDataSource implements BridgeDataSource {
         this.selection = Objects.requireNonNull(selection); this.worldGeneration = Objects.requireNonNull(worldGeneration);
         this.worldIdentity = Objects.requireNonNull(worldIdentity); this.capture = Objects.requireNonNull(capture);
         this.io = Objects.requireNonNull(io);
+        this.blockCatalog = new ClientBlockCatalog(client);
+        this.blockPreviews = new BlockPreviewRenderer(client);
+        this.catalogStore = null;
+    }
+
+    public BuilderBridgeDataSource(MinecraftClient client, Supplier<Optional<WorldSnapshot>> snapshots,
+                                   Supplier<Optional<Bounds>> selection, LongSupplier worldGeneration,
+                                   Supplier<String> worldIdentity, WorldCapture capture, Executor io, Path builderDirectory) {
+        this.client = Objects.requireNonNull(client); this.snapshots = Objects.requireNonNull(snapshots);
+        this.selection = Objects.requireNonNull(selection); this.worldGeneration = Objects.requireNonNull(worldGeneration);
+        this.worldIdentity = Objects.requireNonNull(worldIdentity); this.capture = Objects.requireNonNull(capture);
+        this.io = Objects.requireNonNull(io); this.blockCatalog = new ClientBlockCatalog(client);
+        this.blockPreviews = new BlockPreviewRenderer(client); this.catalogStore = new BlockCatalogStore(builderDirectory);
     }
 
     @Override public CompletionStage<BridgeProtocol.Response> status(BridgeProtocol.Request request) {
@@ -93,6 +115,80 @@ public final class BuilderBridgeDataSource implements BridgeDataSource {
             } catch (Throwable failure) { result.complete(failed(request, generation, 0, failure)); }
         });
         return result;
+    }
+
+    @Override public CompletionStage<BridgeProtocol.Response> listBlockMods(BridgeProtocol.Request request) {
+        return onClient(request, generation -> {
+            BlockCatalog.ModPage page = activeCatalog().listMods(request.page());
+            JsonObject payload = new JsonObject(); var items = new com.google.gson.JsonArray();
+            for (var mod : page.mods()) {
+                JsonObject item = new JsonObject(); item.addProperty("namespace", mod.namespace()); item.addProperty("name", mod.label());
+                item.addProperty("blocks", mod.blockCount()); items.add(item);
+            }
+            payload.add("mods", items); payload.addProperty("total", page.total());
+            if (page.nextPage() != null) payload.addProperty("nextPage", page.nextPage());
+            return ok(request, generation, scansRevision(), payload.toString(), null);
+        });
+    }
+
+    @Override public CompletionStage<BridgeProtocol.Response> searchBlocks(BridgeProtocol.Request request) {
+        return onClient(request, generation -> {
+            Optional<String> namespace = Optional.ofNullable(request.namespace());
+            BlockCatalog.BlockPage page = activeCatalog().search(Objects.requireNonNullElse(request.query(), ""), namespace, request.page());
+            JsonObject payload = new JsonObject(); var items = new com.google.gson.JsonArray();
+            for (var block : page.blocks()) {
+                JsonObject item = new JsonObject(); item.addProperty("id", block.id()); item.addProperty("namespace", block.namespace());
+                item.addProperty("name", block.label());
+                JsonObject properties = new JsonObject(); block.properties().forEach((name, values) -> {
+                    var array = new com.google.gson.JsonArray(); values.forEach(array::add); properties.add(name, array);
+                });
+                item.add("properties", properties); items.add(item);
+                JsonObject defaults = new JsonObject(); block.defaultState().forEach(defaults::addProperty);
+                item.add("defaultState", defaults); item.addProperty("hasBlockEntity", block.hasBlockEntity());
+            }
+            payload.add("blocks", items); payload.addProperty("total", page.total());
+            if (page.nextPage() != null) payload.addProperty("nextPage", page.nextPage());
+            return ok(request, generation, scansRevision(), payload.toString(), null);
+        });
+    }
+
+    @Override public CompletionStage<BridgeProtocol.Response> describeBlock(BridgeProtocol.Request request) {
+        return onClient(request, generation -> {
+            if (request.blockId() == null || request.blockId().length() > 256) throw new IllegalArgumentException("Exact block ID is required");
+            BlockCatalog.BlockDetails details = activeCatalog().describe(request.blockId())
+                .orElseThrow(() -> new IllegalArgumentException("Unknown exact block ID"));
+            BlockPreviewRenderer.PreviewPng preview;
+            try { preview = blockPreviews.renderNow(details.id()); }
+            catch (IOException unavailable) { throw new IllegalStateException("Block preview is unavailable", unavailable); }
+            JsonObject payload = new JsonObject(); payload.addProperty("id", details.id()); payload.addProperty("name", details.label());
+            JsonObject properties = new JsonObject(); details.properties().forEach((name, values) -> {
+                var array = new com.google.gson.JsonArray(); values.forEach(array::add); properties.add(name, array);
+            });
+            payload.add("properties", properties); payload.addProperty("previewState", "inventory-default");
+            JsonObject defaults = new JsonObject(); details.defaultState().forEach(defaults::addProperty);
+            payload.add("defaultState", defaults); payload.addProperty("hasBlockEntity", details.hasBlockEntity());
+            return ok(request, generation, scansRevision(), payload.toString(), Base64.getEncoder().encodeToString(preview.bytes()));
+        });
+    }
+
+    private long scansRevision() { return snapshots.get().map(WorldSnapshot::revision).orElse(0L); }
+
+    private BlockCatalog activeCatalog() {
+        BlockCatalog catalog = blockCatalog.snapshot();
+        if (catalogStore == null) return catalog;
+        BlockCatalogFingerprint fingerprint = blockCatalog.fingerprint();
+        if (fingerprint.sha256().equals(persistedCatalogFingerprint)) return catalog;
+        persistedCatalogFingerprint = fingerprint.sha256();
+        long saveGeneration = catalogSaveGeneration.incrementAndGet();
+        var snapshot = new BlockCatalogSnapshotCodec.Snapshot(fingerprint, catalog.entries());
+        long world = worldGeneration.getAsLong();
+        try {
+            CompletableFuture.runAsync(() -> {
+                try { catalogStore.save(snapshot, () -> saveGeneration == catalogSaveGeneration.get() && world == worldGeneration.getAsLong()); }
+                catch (IOException failure) { persistedCatalogFingerprint = null; }
+            }, io);
+        } catch (RejectedExecutionException ignored) { persistedCatalogFingerprint = null; }
+        return catalog;
     }
 
     private BridgeProtocol.Response encodeCapture(BridgeProtocol.Request request, long generation, long revision, Path path) {

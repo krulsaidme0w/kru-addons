@@ -15,6 +15,7 @@ import java.util.concurrent.TimeUnit;
 public final class BridgeClient {
     public static final int PROTOCOL_VERSION = 1;
     public static final int MAX_PAGE_SIZE = 1024;
+    public static final int MAX_CATALOG_PAGE = 10_000;
     public static final int MAX_IMAGE_BYTES = 8 * 1024 * 1024;
     private static final Gson GSON = new Gson();
     private final URI baseUri;
@@ -29,6 +30,7 @@ public final class BridgeClient {
     }
     public record BridgeReply(boolean ok, long worldGeneration, long snapshotRevision, String message, String payload) {}
     public record CaptureReply(long worldGeneration, long snapshotRevision, byte[] png) {}
+    public record BlockDescription(BridgeReply metadata, byte[] png) {}
     public record PairResult(String state, String message) {}
     private record WireResponse(int version, String id, boolean ok, long worldGeneration, long snapshotRevision,
                                 String message, String payload, String imageBase64) {}
@@ -51,6 +53,29 @@ public final class BridgeClient {
     }
 
     public BridgeReply status() { return call("/v1/status", "STATUS", null, 0, 0, 0, 0); }
+
+    public BridgeReply listBlockMods(int page) {
+        if (page < 0 || page > MAX_CATALOG_PAGE) throw new IllegalArgumentException("Invalid catalog page");
+        return call("/v1/catalog/mods", "LIST_BLOCK_MODS", null, page, 20, 0, 0, null, null, null);
+    }
+
+    public BridgeReply searchBlocks(String query, String namespace, int page) {
+        if (query == null || query.length() > 128 || (query.isBlank() && (namespace == null || namespace.isBlank()))
+            || page < 0 || page > MAX_CATALOG_PAGE || (namespace != null && namespace.length() > 128))
+            throw new IllegalArgumentException("Invalid block catalog search");
+        return call("/v1/catalog/search", "SEARCH_BLOCKS", null, page, 20, 0, 0, query, namespace, null);
+    }
+
+    public BlockDescription describeBlock(String id) {
+        if (id == null || id.length() > 256 || !id.matches("[a-z0-9_.-]+:[a-z0-9_./-]+")) throw new IllegalArgumentException("Expected an exact namespaced block ID");
+        WireResponse response = wire(callRequest("/v1/catalog/describe", "DESCRIBE_BLOCK", null, 0, 0, 0, 0, null, null, id));
+        if (!response.ok()) throw new BridgeException(response.message());
+        if (response.imageBase64() == null) throw new BridgeException("No block preview returned");
+        try {
+            byte[] png = Base64.getDecoder().decode(response.imageBase64()); validatePng(png);
+            return new BlockDescription(new BridgeReply(true, response.worldGeneration(), response.snapshotRevision(), response.message(), response.payload()), png);
+        } catch (IllegalArgumentException invalid) { throw new BridgeException("Bridge returned an invalid block preview", invalid); }
+    }
 
     public BridgeReply readSelection(Bounds bounds, int page, int pageSize, long worldGeneration, long snapshotRevision) {
         if (page < 0 || pageSize < 1 || pageSize > MAX_PAGE_SIZE || worldGeneration < 1 || snapshotRevision < 1)
@@ -99,16 +124,26 @@ public final class BridgeClient {
     public String pendingPairCode() { return pendingPairCode; }
 
     private BridgeReply call(String path, String method, Bounds bounds, int page, int pageSize, long generation, long revision) {
-        WireResponse response = wire(callRequest(path, method, bounds, page, pageSize, generation, revision));
+        return call(path, method, bounds, page, pageSize, generation, revision, null, null, null);
+    }
+    private BridgeReply call(String path, String method, Bounds bounds, int page, int pageSize, long generation, long revision,
+                             String query, String namespace, String blockId) {
+        WireResponse response = wire(callRequest(path, method, bounds, page, pageSize, generation, revision, query, namespace, blockId));
         return new BridgeReply(response.ok(), response.worldGeneration(), response.snapshotRevision(), response.message(), response.payload());
     }
 
     private HttpRequest callRequest(String path, String method, Bounds bounds, int page, int pageSize, long generation, long revision) {
+        return callRequest(path, method, bounds, page, pageSize, generation, revision, null, null, null);
+    }
+    private HttpRequest callRequest(String path, String method, Bounds bounds, int page, int pageSize, long generation, long revision,
+                                    String query, String namespace, String blockId) {
         String auth = token;
         if (auth == null) throw new BridgeException("Pair this MCP companion with Minecraft first");
         JsonObject json = new JsonObject(); json.addProperty("version", PROTOCOL_VERSION); json.addProperty("id", "mcp-" + Long.toUnsignedString(System.nanoTime()));
         json.addProperty("method", method); json.add("bounds", GSON.toJsonTree(bounds)); json.addProperty("page", page); json.addProperty("pageSize", pageSize);
         json.addProperty("expectedWorldGeneration", generation); json.addProperty("expectedSnapshotRevision", revision); json.add("token", com.google.gson.JsonNull.INSTANCE);
+        if (query != null) json.addProperty("query", query); if (namespace != null) json.addProperty("namespace", namespace);
+        if (blockId != null) json.addProperty("blockId", blockId);
         return HttpRequest.newBuilder(uri(path)).timeout(timeout).header("Authorization", "Bearer " + auth)
             .header("Content-Type", "application/json").POST(HttpRequest.BodyPublishers.ofString(json.toString(), StandardCharsets.UTF_8)).build();
     }

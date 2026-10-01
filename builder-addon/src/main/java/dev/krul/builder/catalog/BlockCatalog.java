@@ -5,20 +5,32 @@ import java.util.*;
 /** Immutable, bounded index of the current client's block registry metadata. */
 public final class BlockCatalog {
     public static final int PAGE_SIZE = 20, MAX_PAGE = 10_000, MAX_QUERY = 128;
-    public record BlockEntry(String id, String namespace, String label, Map<String, List<String>> properties) {
+    public record BlockEntry(String id, String namespace, String label, Map<String, List<String>> properties,
+                             Map<String, String> defaultState, boolean hasBlockEntity) {
+        public BlockEntry(String id, String namespace, String label, Map<String, List<String>> properties) {
+            this(id, namespace, label, properties, Map.of(), false);
+        }
         public BlockEntry {
             Objects.requireNonNull(id); Objects.requireNonNull(namespace); Objects.requireNonNull(label);
             if (!id.startsWith(namespace + ":") || id.length() > 256) throw new IllegalArgumentException("Invalid registry ID");
             var copy = new TreeMap<String,List<String>>();
             Objects.requireNonNull(properties).forEach((key, values) -> copy.put(Objects.requireNonNull(key), List.copyOf(values)));
             properties = Collections.unmodifiableMap(copy);
+            defaultState = Collections.unmodifiableMap(new TreeMap<>(Objects.requireNonNull(defaultState)));
+            if (!properties.keySet().containsAll(defaultState.keySet())) throw new IllegalArgumentException("Default state has unknown properties");
+            for (var entry : defaultState.entrySet()) if (!properties.get(entry.getKey()).contains(entry.getValue()))
+                throw new IllegalArgumentException("Default state contains an illegal property value");
         }
     }
     public record ModEntry(String namespace, String label, int blockCount) { }
     public record ModPage(List<ModEntry> mods, int total, Integer nextPage) { public ModPage { mods = List.copyOf(mods); } }
     public record BlockPage(List<BlockEntry> blocks, int total, Integer nextPage) { public BlockPage { blocks = List.copyOf(blocks); } }
-    public record BlockDetails(String id, String label, Map<String,List<String>> properties) {
-        public BlockDetails { var copy = new TreeMap<String,List<String>>(); properties.forEach((k,v)->copy.put(k,List.copyOf(v))); properties=Collections.unmodifiableMap(copy); }
+    public record BlockDetails(String id, String label, Map<String,List<String>> properties, Map<String,String> defaultState, boolean hasBlockEntity) {
+        public BlockDetails(String id, String label, Map<String,List<String>> properties) { this(id, label, properties, Map.of(), false); }
+        public BlockDetails {
+            var copy = new TreeMap<String,List<String>>(); properties.forEach((k,v)->copy.put(k,List.copyOf(v))); properties=Collections.unmodifiableMap(copy);
+            defaultState = Collections.unmodifiableMap(new TreeMap<>(defaultState));
+        }
     }
     private final List<BlockEntry> entries;
     private final Map<String, BlockEntry> byId;
@@ -55,8 +67,9 @@ public final class BlockCatalog {
     }
     public Optional<BlockDetails> describe(String exactId) {
         if (exactId == null) return Optional.empty();
-        return Optional.ofNullable(byId.get(exactId)).map(e -> new BlockDetails(e.id(), e.label(), e.properties()));
+        return Optional.ofNullable(byId.get(exactId)).map(e -> new BlockDetails(e.id(), e.label(), e.properties(), e.defaultState(), e.hasBlockEntity()));
     }
+    public List<BlockEntry> entries() { return entries; }
     private static int offset(int page,int size) { long value=(long)page*PAGE_SIZE; return value >= size ? size : (int)value; }
     private static void checkPage(int page) { if (page < 0 || page > MAX_PAGE) throw new IllegalArgumentException("Page is outside the supported range"); }
 }

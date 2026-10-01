@@ -208,7 +208,7 @@ public final class BuilderModule extends Module {
         try {
             bridgeServer = new BuilderBridgeServer(bridgePairing);
             bridgeServer.start(new BuilderBridgeDataSource(mc, scans::snapshot, scans::bounds,
-                () -> bridgeWorldGeneration, this::bridgeWorldIdentity, worldCapture, io));
+                () -> bridgeWorldGeneration, this::bridgeWorldIdentity, worldCapture, io, root));
         } catch (IOException failure) {
             bridgeServer = null;
             warning("Builder local bridge could not start: %s", failure.getMessage());

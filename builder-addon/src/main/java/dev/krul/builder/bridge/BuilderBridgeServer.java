@@ -41,6 +41,9 @@ public final class BuilderBridgeServer implements AutoCloseable {
         route("/v1/status", exchange -> authenticated(exchange, source, BridgeProtocol.Method.STATUS));
         route("/v1/selection", exchange -> authenticated(exchange, source, BridgeProtocol.Method.READ_SELECTION));
         route("/v1/capture", exchange -> authenticated(exchange, source, BridgeProtocol.Method.CAPTURE_VIEW));
+        route("/v1/catalog/mods", exchange -> authenticated(exchange, source, BridgeProtocol.Method.LIST_BLOCK_MODS));
+        route("/v1/catalog/search", exchange -> authenticated(exchange, source, BridgeProtocol.Method.SEARCH_BLOCKS));
+        route("/v1/catalog/describe", exchange -> authenticated(exchange, source, BridgeProtocol.Method.DESCRIBE_BLOCK));
         server.start();
         return server.getAddress();
     }
@@ -88,6 +91,9 @@ public final class BuilderBridgeServer implements AutoCloseable {
             case STATUS -> source.status(input);
             case READ_SELECTION -> source.readSelection(input);
             case CAPTURE_VIEW -> source.captureView(input);
+            case LIST_BLOCK_MODS -> source.listBlockMods(input);
+            case SEARCH_BLOCKS -> source.searchBlocks(input);
+            case DESCRIBE_BLOCK -> source.describeBlock(input);
             default -> throw new IllegalArgumentException("Unsupported method");
         };
         try {

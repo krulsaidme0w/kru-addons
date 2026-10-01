@@ -14,13 +14,24 @@ class BuilderMcpToolsTest {
     @Test void exposesOnlyBoundedInspectionAndExplicitPairingTools() {
         var bridge = new BridgeClient(URI.create("http://127.0.0.1:47653"), Duration.ofSeconds(1));
         var tools = BuilderMcpServer.toolSpecifications(bridge);
-        assertEquals(Set.of("minecraft_status", "read_selection", "capture_view", "pair_local_minecraft"),
+        assertEquals(Set.of("minecraft_status", "read_selection", "capture_view", "pair_local_minecraft",
+                "list_block_mods", "search_blocks", "describe_block"),
             tools.stream().map(tool -> tool.tool().name()).collect(Collectors.toSet()));
         assertTrue(tools.stream().noneMatch(tool -> tool.tool().name().contains("place") || tool.tool().name().contains("move") || tool.tool().name().contains("command")));
         assertTrue(tools.stream().filter(tool -> !tool.tool().name().equals("pair_local_minecraft"))
             .allMatch(tool -> Boolean.TRUE.equals(tool.tool().annotations().readOnlyHint())));
         assertFalse(Boolean.TRUE.equals(tools.stream().filter(tool -> tool.tool().name().equals("pair_local_minecraft"))
             .findFirst().orElseThrow().tool().annotations().readOnlyHint()));
+    }
+
+    @Test void catalogToolsStayPagedAndReturnOneExactPreview() {
+        var tools = BuilderMcpServer.toolSpecifications(new BridgeClient(URI.create("http://127.0.0.1:47653"), Duration.ofSeconds(1)));
+        var search = tools.stream().filter(tool -> tool.tool().name().equals("search_blocks")).findFirst().orElseThrow().tool();
+        assertEquals(Boolean.FALSE, search.inputSchema().get("additionalProperties"));
+        Map<?, ?> props = (Map<?, ?>) search.inputSchema().get("properties");
+        assertEquals(128, ((Map<?, ?>) props.get("query")).get("maxLength"));
+        assertTrue(tools.stream().filter(tool -> Set.of("list_block_mods", "search_blocks", "describe_block").contains(tool.tool().name()))
+            .allMatch(tool -> Boolean.TRUE.equals(tool.tool().annotations().readOnlyHint())));
     }
 
     @Test void selectionSchemaIsClosedAndCapsPageSize() {
