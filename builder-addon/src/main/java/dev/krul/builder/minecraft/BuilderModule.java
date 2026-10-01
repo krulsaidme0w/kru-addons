@@ -10,6 +10,8 @@ import dev.krul.builder.agent.BuilderDynamicTools;
 import dev.krul.builder.archive.ConversationArchiveStore;
 import dev.krul.builder.archive.LegacyProjectMigration;
 import dev.krul.builder.context.ScanSession;
+import dev.krul.builder.bridge.BridgePairing;
+import dev.krul.builder.bridge.BuilderBridgeServer;
 import dev.krul.builder.context.BoundsContext;
 import dev.krul.builder.context.BoundsInput;
 import dev.krul.builder.context.BoundsStore;
@@ -88,6 +90,10 @@ public final class BuilderModule extends Module {
     private AgentClient agent;
     private BuilderController controller;
     private long runtimeGeneration;
+    private long bridgeWorldGeneration;
+    private BridgePairing bridgePairing;
+    private BuilderBridgeServer bridgeServer;
+    private BridgePairing.State reportedPairingState = BridgePairing.State.NONE;
     private BlueprintRenderer blueprintRenderer;
     private BuildPlan renderedPlan;
     private BlueprintDiff.Selection renderedSelection;
@@ -112,6 +118,7 @@ public final class BuilderModule extends Module {
         boolean identityChanged = boundWorld != world || boundConnection != connection || boundPlayer != player;
         boolean contextChanged = !Objects.equals(activeBoundsContext, nextContext);
         if (identityChanged || contextChanged) {
+            bridgeWorldGeneration++;
             Optional<Bounds> retained = scans.bounds();
             boolean changed = boundWorld != null || boundConnection != null || boundPlayer != null || activeBoundsContext != null;
             boundWorld = world; boundConnection = connection; boundPlayer = player;
@@ -140,6 +147,8 @@ public final class BuilderModule extends Module {
     }
 
     @Override public void onActivate() {
+        bridgeWorldGeneration++;
+        bridgePairing = BridgePairing.secureDefault();
         scans.reset(); projectSession = null; reportedStatus = null;
         reportedFailure = BuilderFailureDedupe.State.empty();
         boundWorld = boundConnection = boundPlayer = null;
@@ -152,6 +161,8 @@ public final class BuilderModule extends Module {
 
     @Override public void onDeactivate() {
         ++runtimeGeneration;
+        if (bridgeServer != null) bridgeServer.close();
+        bridgeServer = null; bridgePairing = null; reportedPairingState = BridgePairing.State.NONE;
         if (controller != null) controller.close();
         if (attachmentPolicy != null && io != null) io.execute(attachmentPolicy::close);
         if (io != null) io.shutdown();
@@ -194,6 +205,14 @@ public final class BuilderModule extends Module {
         attachmentPolicy = policy;
         activeConversation = legacyMigrationWarning.isBlank() ? PROJECT : UUID.randomUUID();
         worldCapture = new WorldCapture(mc, attachmentPolicy, io);
+        try {
+            bridgeServer = new BuilderBridgeServer(bridgePairing);
+            bridgeServer.start(new BuilderBridgeDataSource(mc, scans::snapshot, scans::bounds,
+                () -> bridgeWorldGeneration, this::bridgeWorldIdentity, worldCapture, io));
+        } catch (IOException failure) {
+            bridgeServer = null;
+            warning("Builder local bridge could not start: %s", failure.getMessage());
+        }
         MinecraftPlanRules rules = new MinecraftPlanRules();
         var catalogTools = new BuilderDynamicTools(new ClientBlockCatalogTools(mc,
             () -> isActive() && runtimeGeneration == generation));
@@ -284,6 +303,7 @@ public final class BuilderModule extends Module {
     }
 
     private void invalidateWorldSession(String reason) {
+        bridgeWorldGeneration++;
         if (controller != null) controller.worldChanged();
         invalidateSelectionState(reason);
     }
@@ -294,6 +314,7 @@ public final class BuilderModule extends Module {
     }
 
     private void invalidateSelectionState(String reason) {
+        bridgeWorldGeneration++;
         projectSession = null;
         renderedPlan = null; renderedSelection = null; blueprintRenderer = null;
         failFreshWaiters(new CancellationException(reason));
@@ -332,11 +353,43 @@ public final class BuilderModule extends Module {
         if (!isActive()) { warning("Enable Builder to open the conversation."); return; }
         if (controller == null) { warning("Builder storage is unavailable; check the module status."); return; }
         mc.setScreen(new BuilderScreen(GuiThemes.get(), controller, () -> boundsWidget(GuiThemes.get()),
-            renderOverlay::get, () -> renderOverlay.set(!renderOverlay.get())));
+            renderOverlay::get, () -> renderOverlay.set(!renderOverlay.get()),
+            () -> bridgePairing == null ? null : bridgePairing.pending(),
+            () -> bridgePairing != null && bridgePairing.state() == BridgePairing.State.APPROVED,
+            this::approveBridgePairing, this::rejectBridgePairing, this::revokeBridgePairing));
+    }
+
+    private void approveBridgePairing() {
+        if (bridgePairing == null) return;
+        BridgePairing.Challenge pending = bridgePairing.pending();
+        if (pending != null && bridgePairing.approve(pending.code())) info("Builder MCP paired for this session.");
+    }
+    private void rejectBridgePairing() {
+        if (bridgePairing == null) return;
+        BridgePairing.Challenge pending = bridgePairing.pending();
+        if (pending != null) bridgePairing.reject(pending.code());
+    }
+    private void revokeBridgePairing() { if (bridgePairing != null) bridgePairing.revoke(); }
+
+    private String bridgeWorldIdentity() {
+        if (mc.world == null) return "";
+        String server = mc.isInSingleplayer() ? "singleplayer" : Optional.ofNullable(mc.getCurrentServerEntry())
+            .map(entry -> entry.address).orElse("unknown-server");
+        return server + "|" + mc.world.getRegistryKey().getValue();
     }
 
     @EventHandler private void onTick(TickEvent.Post event) {
         syncContext(); scans.tick(); tickFreshScan();
+        if (bridgePairing != null) {
+            BridgePairing.State pairingState = bridgePairing.state();
+            if (pairingState == BridgePairing.State.WAITING && reportedPairingState != pairingState) {
+                BridgePairing.Challenge challenge = bridgePairing.pending();
+                if (challenge != null) info("Builder MCP pairing requested (%s). Open Builder Settings to allow or reject.", challenge.code());
+            }
+            if (pairingState == BridgePairing.State.NONE && reportedPairingState == BridgePairing.State.APPROVED)
+                info("Builder MCP pairing revoked.");
+            reportedPairingState = pairingState;
+        }
         if (controller != null) scans.snapshot().ifPresent(controller::observeSnapshot);
         reportFailure();
         if (projectSession == null && !freshScanActive && !freshAfterCurrent)

@@ -17,7 +17,8 @@ public final class BridgeProtocol {
 
     public enum Method { STATUS, READ_SELECTION, CAPTURE_VIEW, PAIR }
 
-    public record Request(int version, String id, Method method, Bounds bounds, int page, int pageSize, String token) {}
+    public record Request(int version, String id, Method method, Bounds bounds, int page, int pageSize,
+                          long expectedWorldGeneration, long expectedSnapshotRevision, String token) {}
 
     /** Payload/image fields are transport strings so this DTO never depends on game or MCP classes. */
     public record Response(int version, String id, boolean ok, long worldGeneration,
@@ -30,10 +31,12 @@ public final class BridgeProtocol {
         checkJsonSize(json);
         try {
             JsonObject object = JsonParser.parseString(json).getAsJsonObject();
-            fields(object, Set.of("version", "id", "method", "bounds", "page", "pageSize", "token"));
+            fields(object, Set.of("version", "id", "method", "bounds", "page", "pageSize",
+                "expectedWorldGeneration", "expectedSnapshotRevision", "token"));
             Request request = GSON.fromJson(object, Request.class);
             if (request.version() != VERSION) throw new IllegalArgumentException("Unsupported bridge protocol version");
-            if (request.id() == null || request.id().isBlank() || request.id().length() > 128 || request.method() == null)
+            if (request.id() == null || request.id().isBlank() || request.id().length() > 128 || request.method() == null
+                || request.expectedWorldGeneration() < 0 || request.expectedSnapshotRevision() < 0)
                 throw new IllegalArgumentException("Invalid bridge request");
             return request;
         } catch (IllegalArgumentException e) {

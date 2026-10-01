@@ -2,6 +2,7 @@ package dev.krul.builder.ui;
 
 import com.mojang.blaze3d.systems.RenderSystem;
 import dev.krul.builder.agent.AgentClient;
+import dev.krul.builder.bridge.BridgePairing;
 import dev.krul.builder.project.BuildPlan;
 import meteordevelopment.meteorclient.gui.GuiTheme;
 import meteordevelopment.meteorclient.gui.WindowScreen;
@@ -19,6 +20,7 @@ import java.net.URI;
 import java.nio.file.Path;
 import java.util.*;
 import java.util.function.BooleanSupplier;
+import java.util.function.Supplier;
 
 /** Compact Meteor-themed chat window. Actions and session state stay in BuilderController. */
 public final class BuilderScreen extends WindowScreen {
@@ -26,6 +28,9 @@ public final class BuilderScreen extends WindowScreen {
     private final java.util.function.Supplier<WWidget> boundsEditor;
     private final BooleanSupplier overlayVisible;
     private final Runnable toggleOverlay;
+    private final Supplier<BridgePairing.Challenge> pairingChallenge;
+    private final BooleanSupplier paired;
+    private final Runnable approvePairing, rejectPairing, revokePairing;
     private final Map<UUID, Texture> textures = new HashMap<>();
     private final Map<UUID, Integer> textureHashes = new HashMap<>();
     private BuilderWrappedLabel summary, statusLabel;
@@ -49,12 +54,17 @@ public final class BuilderScreen extends WindowScreen {
     private boolean showReferencePath;
 
     public BuilderScreen(GuiTheme theme, BuilderController controller, java.util.function.Supplier<WWidget> boundsEditor,
-                         BooleanSupplier overlayVisible, Runnable toggleOverlay) {
+                         BooleanSupplier overlayVisible, Runnable toggleOverlay,
+                         Supplier<BridgePairing.Challenge> pairingChallenge, BooleanSupplier paired,
+                         Runnable approvePairing, Runnable rejectPairing, Runnable revokePairing) {
         super(theme, "Builder");
         this.controller = Objects.requireNonNull(controller);
         this.boundsEditor = Objects.requireNonNull(boundsEditor);
         this.overlayVisible = Objects.requireNonNull(overlayVisible);
         this.toggleOverlay = Objects.requireNonNull(toggleOverlay);
+        this.pairingChallenge = Objects.requireNonNull(pairingChallenge); this.paired = Objects.requireNonNull(paired);
+        this.approvePairing = Objects.requireNonNull(approvePairing); this.rejectPairing = Objects.requireNonNull(rejectPairing);
+        this.revokePairing = Objects.requireNonNull(revokePairing);
         onClosed(this::disposeTextures);
     }
 
@@ -170,7 +180,7 @@ public final class BuilderScreen extends WindowScreen {
     private void refreshDynamic(BuilderUiState state) {
         if (settingsPanel != null) {
             int nextSettingsHash = Objects.hash(state.phase(), state.status(), state.connection(), state.executable(),
-                state.authorizationUrl(), state.userCode(), textWrapWidth);
+                state.authorizationUrl(), state.userCode(), pairingChallenge.get(), paired.getAsBoolean(), textWrapWidth);
             if (nextSettingsHash != settingsContentHash) {
                 settingsPanel.clear();
                 renderSettings(state);
@@ -290,6 +300,18 @@ public final class BuilderScreen extends WindowScreen {
 
     private void renderSettings(BuilderUiState state) {
         settingsPanel.add(wrappedLabel(statusLine(state))).expandX();
+        BridgePairing.Challenge challenge = pairingChallenge.get();
+        settingsPanel.add(theme.label("Local MCP bridge · 127.0.0.1:47653")).expandX();
+        if (challenge != null) {
+            settingsPanel.add(wrappedLabel("Pairing request · code " + challenge.code())).expandX();
+            WHorizontalList pairingActions = theme.horizontalList();
+            pairingActions.add(theme.button("Allow local companion")).widget().action = approvePairing;
+            pairingActions.add(theme.button("Reject")).widget().action = rejectPairing;
+            settingsPanel.add(pairingActions).expandX();
+        } else {
+            settingsPanel.add(theme.label("Pairing: " + (paired.getAsBoolean() ? "paired" : "not paired"))).expandX();
+            if (paired.getAsBoolean()) settingsPanel.add(theme.button("Revoke pairing")).expandX().widget().action = revokePairing;
+        }
         settingsPanel.add(theme.button("Reopen saved project")).expandX().widget().action = controller::reopenProject;
         settingsPanel.add(wrappedLabel("Connection: " + state.connection().connection() + " · " + state.connection().login())).expandX();
         settingsPanel.add(wrappedLabel("Executable: " + state.executable() + " (edit in Builder module settings)")).expandX();

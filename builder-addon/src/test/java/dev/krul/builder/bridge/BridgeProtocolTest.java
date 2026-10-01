@@ -9,7 +9,7 @@ import static org.junit.jupiter.api.Assertions.*;
 class BridgeProtocolTest {
     @Test void roundTripsSupportedVersionedRequest() throws Exception {
         var request = new BridgeProtocol.Request(BridgeProtocol.VERSION, "r1", BridgeProtocol.Method.STATUS,
-            null, 0, 0, null);
+            null, 0, 0, 0, 0, null);
         assertEquals(request, BridgeProtocol.decodeRequest(BridgeProtocol.encodeRequest(request)));
     }
 
