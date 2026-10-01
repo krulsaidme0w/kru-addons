@@ -98,6 +98,8 @@ public final class BuilderBridgeDataSource implements BridgeDataSource {
     private BridgeProtocol.Response encodeCapture(BridgeProtocol.Request request, long generation, long revision, Path path) {
         try {
             if (worldGeneration.getAsLong() != generation) throw new CancellationException("World changed during capture");
+            long currentRevision = snapshots.get().map(WorldSnapshot::revision).orElse(0L);
+            if (currentRevision != revision) throw new CancellationException("Snapshot changed during capture; capture again");
             byte[] png = Files.readAllBytes(path);
             BridgeRequestValidator.validatePng(png, MAX_PNG_BYTES);
             return ok(request, generation, revision, null, Base64.getEncoder().encodeToString(png));

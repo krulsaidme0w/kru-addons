@@ -96,6 +96,7 @@ public final class BuilderBridgeServer implements AutoCloseable {
         } catch (InterruptedException interrupted) {
             Thread.currentThread().interrupt(); send(exchange, 503, "Request interrupted");
         } catch (ExecutionException | TimeoutException failure) {
+            operation.toCompletableFuture().cancel(true);
             send(exchange, 504, "Minecraft client did not respond in time");
         }
     }
