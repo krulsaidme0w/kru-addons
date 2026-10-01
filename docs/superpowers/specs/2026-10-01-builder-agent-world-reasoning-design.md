@@ -40,7 +40,7 @@ Design guidance is a compact rubric, not a fixed style generator. The user’s p
 4. The client renders the validated draft into one bounded contact sheet and returns it as an image tool result.
 5. The model makes at most one critique/revision pass and returns the final structured plan plus concise design rationale.
 6. The existing decoder validates again; `ProjectSession` exposes the draft, and user action is still required to save/activate its overlay.
-7. The conversation archive records final response, tool-review result, and every proposal revision without persisting images or auth data.
+7. The conversation archive records final response, tool-review result, every proposal revision, and its source bounds without persisting user images or auth data. Historical contact sheets can be regenerated locally from the archived plan and source bounds; unavailable local block models produce an explicit unavailable-preview state.
 
 ## Safety and failure handling
 

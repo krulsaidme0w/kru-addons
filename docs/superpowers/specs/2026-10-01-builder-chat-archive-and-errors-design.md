@@ -22,7 +22,7 @@ Make Builder conversations and plan revisions durable, selectable local records,
 
 ## Architecture
 
-Add a local archive domain independent of the GUI and Codex process. A conversation record owns its stable conversation/project UUID, display title, created/updated times, ordered text entries, and immutable plan-history entries. Each plan-history entry stores the full `BuildPlan`, its lifecycle label (proposal, revised, rejected, or saved), source context revision/session, and validation diagnostics. The current selected conversation ID is persisted separately. A plan’s project UUID is the conversation ID so existing plan validation and rendering continue to work without a second identity translation.
+Add a local archive domain independent of the GUI and Codex process. A conversation record owns its stable conversation/project UUID, display title, created/updated times, ordered text entries, and immutable plan-history entries. Each plan-history entry stores the full `BuildPlan`, its lifecycle label (proposal, revised, rejected, or saved), source context revision/session/bounds, and validation diagnostics. The current selected conversation ID is persisted separately. A plan’s project UUID is the conversation ID so existing plan validation and rendering continue to work without a second identity translation.
 
 An archive store under the existing `kru-builder` instance directory uses versioned JSON and the repository’s established safe file practices: bounded decode, reject symbolic links, write temporary files, force data, and atomically replace where supported. Store APIs accept immutable records and leave thread scheduling to the caller. Message and plan writes are serialized in order by the controller; a failed write remains visible as a durable-storage error and must not be reported as saved. Deleting a conversation is explicit and removes only that conversation’s archive file; no automatic pruning silently loses history.
 
@@ -47,7 +47,7 @@ Replace string-only failure paths with a structured diagnostic carrying category
 
 ## Compatibility and privacy
 
-The archive is local to the Minecraft instance directory. It stores user/model text and block plans, so its location and deletion behavior must be documented. Existing explicit screenshot attachment consent remains unchanged; images are not copied into chat history. Authorization URLs, device codes, tokens, environment values, and raw screenshots are never archived.
+The archive is local to the Minecraft instance directory. It stores user/model text and block plans, so its location and deletion behavior must be documented. Existing explicit screenshot attachment consent remains unchanged; user screenshots and image attachments are not copied into chat history. Small generated plan contact sheets may be regenerated from the archived plan and source bounds; they are derived previews, not screenshots or user attachments. Authorization URLs, device codes, tokens, environment values, and raw screenshots are never archived.
 
 ## Verification
 
