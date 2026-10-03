@@ -5,6 +5,33 @@ import java.util.List;
 import static org.junit.jupiter.api.Assertions.*;
 
 class GtsHoverReaderTest {
+    @Test void readsDeltaClientListingPayloadWithoutItemTooltip() {
+        var details = GtsHoverReader.fromDeltaPokemon(new DeltaPokemon());
+        assertNotNull(details);
+        assertEquals("Mimikyu", details.displayName());
+        assertEquals(IvTintTier.IV_90, details.ivTier());
+        assertTrue(details.shiny());
+        assertEquals(List.of("Ghost", "Fairy"), details.types());
+    }
+
+    public static final class DeltaPokemon {
+        public String getSpeciesId() { return "cobblemon:mimikyu"; }
+        public String getName() { return "Mimikyu"; }
+        public List<String> getAspects() { return List.of("shiny", "female"); }
+        public String getPrimaryType() { return "Ghost"; }
+        public String getSecondaryType() { return "Fairy"; }
+        public List<Integer> getIvs() { return List.of(31, 25, 30, 28, 26, 31); }
+        public List<String> getMoves() { return List.of("Play Rough", "Shadow Sneak"); }
+        public String getTeraType() { return "Ghost"; }
+        public String getAbility() { return "Disguise"; }
+        public String getNature() { return "Jolly"; }
+        public String getHeldItem() { return "None"; }
+        public String getCaughtBall() { return "Ultra Ball"; }
+        public String getSkin() { return ""; }
+        public double getSize() { return 1.0; }
+        public int getLevel() { return 50; }
+        public String getGender() { return "Female"; }
+    }
     @Test void readsDetailsFromOnePokemonListingAndIgnoresNonListings() {
         var listing = GtsHoverReader.fromListing("cobblemon:pokemon_model", "Mimikyu Lv. 100", "cobblemon:mimikyu", List.of("shiny", "female"),
             List.of("Mimikyu ♀ Lv. 100", "Ghost/Fairy", "IVs: 186/186 (100%)", "HP 31", "Atk 31", "Def 31",

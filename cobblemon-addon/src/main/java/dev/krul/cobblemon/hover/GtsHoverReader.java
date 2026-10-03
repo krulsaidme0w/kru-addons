@@ -14,6 +14,7 @@ import java.util.regex.Pattern;
 
 /** Read-only reader for the exact server-authored GTS listing below the pointer. */
 public final class GtsHoverReader {
+    private static final String DELTA_GTS_SCREEN = "com.symstudios.deltaclient.gui.gts.GtsScreen";
     private static final Pattern LEVEL = Pattern.compile("\\bLv\\.\\s*(\\d+)");
     private static final Pattern STAT = Pattern.compile("(?i)^(โ|เ|แ|ใ|ไ|ๅ|HP|Atk|Attack|Def|Defense|SpA|SpAtk|Sp\\.? Atk|SpD|SpDef|Sp\\.? Def|Spe|Speed)\\s*:?\\s*(\\d+)$");
     private static final List<String> STAT_NAMES = List.of("HP", "Atk", "Def", "SpA", "SpD", "Spe");
@@ -40,6 +41,75 @@ public final class GtsHoverReader {
             return fromListing(Registries.ITEM.getId(stack.getItem()).toString(), stack.getName().getString(), species, aspects, lines).map(details -> new Hovered(details,
                 new HoverCardLayout.Rect(x + slot.x, y + slot.y, 16, 16)));
         } catch (ReflectiveOperationException | RuntimeException | LinkageError ignored) { return Optional.empty(); }
+    }
+
+    /** DeltaClient GTS is a custom Screen, not a HandledScreen; read its immutable listing packet. */
+    public Optional<Hovered> readDeltaAt(Screen screen, int mouseX, int mouseY) {
+        if (screen == null || !DELTA_GTS_SCREEN.equals(screen.getClass().getName())) return Optional.empty();
+        try {
+            Object state = fieldValue(screen, "state");
+            Object listings = invoke(state, "getListings");
+            if (!(listings instanceof List<?> values)) return Optional.empty();
+            double scale = ((Number) invoke(screen, "canvasScale")).doubleValue();
+            double originX = ((Number) invoke(screen, "screenOriginX", new Class<?>[]{float.class}, (float) scale)).doubleValue();
+            double originY = ((Number) invoke(screen, "screenOriginY", new Class<?>[]{float.class}, (float) scale)).doubleValue();
+            double canvasMouseX = (mouseX - originX) / scale, canvasMouseY = (mouseY - originY) / scale;
+            for (int i = 0; i < Math.min(values.size(), 30); i++) {
+                Object rect = invoke(screen, "cardRect", new Class<?>[]{int.class}, i);
+                double left = number(rect, "getLeft"), top = number(rect, "getTop");
+                double width = number(rect, "getWidth"), height = number(rect, "getHeight");
+                if (canvasMouseX < left || canvasMouseY < top || canvasMouseX >= left + width || canvasMouseY >= top + height) continue;
+                Object pokemon = invoke(values.get(i), "getPokemon");
+                PokemonHoverDetails details = fromDeltaPokemon(pokemon);
+                if (details == null) return Optional.empty();
+                return Optional.of(new Hovered(details, new HoverCardLayout.Rect(originX + left * scale,
+                    originY + top * scale, width * scale, height * scale)));
+            }
+        } catch (ReflectiveOperationException | RuntimeException | LinkageError ignored) { }
+        return Optional.empty();
+    }
+
+    public static PokemonHoverDetails fromDeltaPokemon(Object pokemon) {
+        if (pokemon == null) return null;
+        try {
+            String speciesId = String.valueOf(invoke(pokemon, "getSpeciesId"));
+            if (!speciesId.startsWith("cobblemon:")) return null;
+            String display = string(pokemon, "getName");
+            if (display.isBlank()) display = title(speciesId.substring(speciesId.indexOf(':') + 1));
+            Object aspectsValue = invoke(pokemon, "getAspects");
+            List<String> aspects = aspectsValue instanceof Iterable<?> items ?
+                java.util.stream.StreamSupport.stream(items.spliterator(), false).map(String::valueOf).toList() : List.of();
+            List<String> types = new ArrayList<>();
+            String primary = string(pokemon, "getPrimaryType"), secondary = string(pokemon, "getSecondaryType");
+            if (!primary.isBlank()) types.add(primary);
+            if (!secondary.isBlank()) types.add(secondary);
+            Object rawIvs = invoke(pokemon, "getIvs");
+            List<Integer> ivs = rawIvs instanceof List<?> list && list.size() == 6 && list.stream().allMatch(Number.class::isInstance)
+                ? list.stream().map(Number.class::cast).map(Number::intValue).toList() : List.of();
+            List<String> moves = strings(invoke(pokemon, "getMoves"));
+            String form = aspects.stream().filter(a -> !a.equalsIgnoreCase("shiny") && !a.contains(":"))
+                .findFirst().orElse("");
+            Object size = invoke(pokemon, "getSize");
+            return new PokemonHoverDetails(display, title(speciesId.substring(speciesId.indexOf(':') + 1)), form,
+                integer(pokemon, "getLevel"), string(pokemon, "getGender"), aspects.stream().anyMatch(a -> a.equalsIgnoreCase("shiny")),
+                types, string(pokemon, "getTeraType"), string(pokemon, "getAbility"), string(pokemon, "getNature"),
+                string(pokemon, "getHeldItem"), string(pokemon, "getCaughtBall"), size instanceof Number n ? String.format(Locale.ROOT, "%.2fx", n.doubleValue()) : "",
+                string(pokemon, "getSkin"), ivs, List.of(), moves);
+        } catch (ReflectiveOperationException | RuntimeException | LinkageError ignored) { return null; }
+    }
+
+    private static List<String> strings(Object value) { return value instanceof Iterable<?> values ? java.util.stream.StreamSupport.stream(values.spliterator(), false).map(String::valueOf).limit(4).toList() : List.of(); }
+    private static String string(Object value, String method) throws ReflectiveOperationException { Object result = invoke(value, method); return result == null ? "" : String.valueOf(result); }
+    private static int integer(Object value, String method) throws ReflectiveOperationException { Object result = invoke(value, method); return result instanceof Number n ? n.intValue() : 0; }
+    private static double number(Object value, String method) throws ReflectiveOperationException { Object result = invoke(value, method); return result instanceof Number n ? n.doubleValue() : 0; }
+    private static Object fieldValue(Object receiver, String name) throws ReflectiveOperationException {
+        for (Class<?> c = receiver.getClass(); c != null; c = c.getSuperclass()) try { Field f = c.getDeclaredField(name); f.setAccessible(true); return f.get(receiver); } catch (NoSuchFieldException ignored) { }
+        throw new NoSuchFieldException(name);
+    }
+    private static Object invoke(Object receiver, String name) throws ReflectiveOperationException { return invoke(receiver, name, new Class<?>[0]); }
+    private static Object invoke(Object receiver, String name, Class<?>[] types, Object... args) throws ReflectiveOperationException {
+        for (Class<?> c = receiver.getClass(); c != null; c = c.getSuperclass()) try { Method m = c.getDeclaredMethod(name, types); m.setAccessible(true); return m.invoke(receiver, args); } catch (NoSuchMethodException ignored) { }
+        throw new NoSuchMethodException(name);
     }
 
     public static boolean isGtsTitle(String raw) {
@@ -119,9 +189,6 @@ public final class GtsHoverReader {
             try { return method.invoke(stack, key); } catch (IllegalArgumentException ignored) { }
         }
         throw new NoSuchMethodException("ItemStack.get(POKEMON_ITEM)");
-    }
-    private static Object invoke(Object receiver, String method) throws ReflectiveOperationException {
-        return receiver.getClass().getMethod(method).invoke(receiver);
     }
     private static String title(String id) { String[] words = id.replace('-', ' ').replace('_', ' ').split("\\s+"); StringJoiner j = new StringJoiner(" "); for (String w : words) if (!w.isBlank()) j.add(Character.toUpperCase(w.charAt(0)) + w.substring(1)); return j.toString(); }
     private static Method method(Class<?> type, String name, int count) throws NoSuchMethodException {

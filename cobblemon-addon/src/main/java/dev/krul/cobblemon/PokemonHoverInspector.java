@@ -34,7 +34,10 @@ public final class PokemonHoverInspector extends Module {
         if (screen == null || client.player == null || client.world == null) return;
         int mouseX = (int) OverlayHost.mouseX(), mouseY = (int) OverlayHost.mouseY();
         DrawContext context = new DrawContext(client, client.getBufferBuilders().getEntityVertexConsumers());
-        if (screen instanceof HandledScreen<?> handled) {
+        if (screen.getClass().getName().equals("com.symstudios.deltaclient.gui.gts.GtsScreen")) {
+            gts.readDeltaAt(screen, mouseX, mouseY).ifPresent(hover -> PokemonHoverRenderer.render(context, hover.details(), hover.bounds(),
+                mouseX, mouseY, screen.width, screen.height));
+        } else if (screen instanceof HandledScreen<?> handled) {
             gts.readAt(handled, mouseX, mouseY).ifPresent(hover -> PokemonHoverRenderer.render(context, hover.details(), hover.bounds(),
                 mouseX, mouseY, screen.width, screen.height));
         } else {

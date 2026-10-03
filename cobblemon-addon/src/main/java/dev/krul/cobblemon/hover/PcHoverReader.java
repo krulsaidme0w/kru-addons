@@ -16,7 +16,16 @@ public final class PcHoverReader {
             List<Object> slots = new ArrayList<>();
             slots.addAll(fieldList(storage, "boxSlots"));
             slots.addAll(fieldList(storage, "partySlots"));
-            return findHovered(slots, mouseX, mouseY);
+            for (Object slot : slots) {
+                Object pokemon = optional(slot, "getPokemon");
+                Object hovered = invoke(slot, "isHovered", new Class<?>[]{int.class, int.class}, mouseX, mouseY);
+                if (pokemon != null && Boolean.TRUE.equals(hovered)) {
+                    Number x = number(slot, "getX"), y = number(slot, "getY");
+                    double sx = x == null ? mouseX : x.doubleValue(), sy = y == null ? mouseY : y.doubleValue();
+                    return Optional.of(new Hovered(pokemon, new HoverCardLayout.Rect(sx, sy, 24, 24)));
+                }
+            }
+            return Optional.empty();
         } catch (ReflectiveOperationException | RuntimeException | LinkageError ignored) { return Optional.empty(); }
     }
 
@@ -42,7 +51,13 @@ public final class PcHoverReader {
         for (Class<?> c = type; c != null; c = c.getSuperclass()) try { return c.getDeclaredField(name); } catch (NoSuchFieldException ignored) { }
         throw new NoSuchFieldException(name);
     }
-    private static Object invoke(Object receiver, String method) throws ReflectiveOperationException { return receiver.getClass().getMethod(method).invoke(receiver); }
+    private static Object invoke(Object receiver, String method) throws ReflectiveOperationException { return invoke(receiver, method, new Class<?>[0]); }
+    private static Object invoke(Object receiver, String method, Class<?>[] types, Object... args) throws ReflectiveOperationException {
+        for (Class<?> c = receiver.getClass(); c != null; c = c.getSuperclass()) try {
+            Method m = c.getDeclaredMethod(method, types); m.setAccessible(true); return m.invoke(receiver, args);
+        } catch (NoSuchMethodException ignored) { }
+        throw new NoSuchMethodException(method);
+    }
     private static Number number(Object receiver, String method) { Object value = optional(receiver, method); return value instanceof Number n ? n : null; }
     private static Object optional(Object receiver, String method) {
         if (receiver == null) return null;

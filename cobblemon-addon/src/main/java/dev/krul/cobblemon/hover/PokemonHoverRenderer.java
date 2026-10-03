@@ -19,6 +19,10 @@ public final class PokemonHoverRenderer {
         int height = 9 + (rows.size() + 1) * ROW + 5;
         var card = HoverCardLayout.place(mouseX, mouseY, WIDTH, height, viewportWidth, viewportHeight, slot);
         int tint = tint(details.ivTier());
+        var matrices = context.getMatrices();
+        matrices.push();
+        matrices.translate(0, 0, 450);
+        try {
         if (slot != null && tint != 0) context.fill((int) slot.x(), (int) slot.y(), (int) (slot.x() + slot.width()),
             (int) (slot.y() + slot.height()), tint);
         int x = (int) card.x(), y = (int) card.y(), right = x + (int) card.width(), bottom = y + (int) card.height();
@@ -29,6 +33,7 @@ public final class PokemonHoverRenderer {
         draw(context, font.trimToWidth(details.displayName() + (details.level() > 0 ? "  Lv. " + details.level() : ""), WIDTH - 14), x + 7, y + 6, 0xFFFFFFFF);
         int textY = y + 6;
         for (String row : rows) { textY += ROW; draw(context, font.trimToWidth(row, WIDTH - 14), x + 7, textY, row.startsWith("IVs") ? 0xFFDCE6F5 : 0xFFB8C0CC); }
+        } finally { matrices.pop(); }
     }
 
     private static List<String> rows(PokemonHoverDetails d) {
