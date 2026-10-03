@@ -6,6 +6,7 @@ import dev.krul.builder.catalog.BlockCatalog;
 import dev.krul.builder.catalog.BlockCatalogFingerprint;
 import dev.krul.builder.catalog.BlockCatalogSnapshotCodec;
 import dev.krul.builder.catalog.BlockCatalogStore;
+import dev.krul.builder.catalog.ItemCatalog;
 import dev.krul.builder.model.Bounds;
 import dev.krul.builder.model.WorldSnapshot;
 import dev.krul.builder.project.*;
@@ -36,17 +37,19 @@ public final class BuilderBridgeDataSource implements BridgeDataSource {
     private final Executor io;
     private final ClientBlockCatalog blockCatalog;
     private final BlockPreviewRenderer blockPreviews;
+    private final ClientItemCatalog itemCatalog;
+    private final ItemPreviewRenderer itemPreviews;
     private final BlockCatalogStore catalogStore;
     private volatile String persistedCatalogFingerprint;
     private final java.util.concurrent.atomic.AtomicLong catalogSaveGeneration = new java.util.concurrent.atomic.AtomicLong();
-    private final Supplier<UUID> conversation;
+    private final Supplier<UUID> planSessionId;
     private final Consumer<BuildPlan> publishPreview;
     private final PlanPreviewRenderer planPreviews;
     private final PlanContractCodec planCodec = new PlanContractCodec();
     private PendingPlan pendingPlan;
     private PendingPlan publishedPlan;
 
-    private record PendingPlan(String token, PlanContract contract, BuildPlan preview, UUID conversation,
+    private record PendingPlan(String token, PlanContract contract, BuildPlan preview, UUID planSessionId,
                                long generation, long revision) {}
 
     public BuilderBridgeDataSource(MinecraftClient client, Supplier<Optional<WorldSnapshot>> snapshots,
@@ -58,8 +61,10 @@ public final class BuilderBridgeDataSource implements BridgeDataSource {
         this.io = Objects.requireNonNull(io);
         this.blockCatalog = new ClientBlockCatalog(client);
         this.blockPreviews = new BlockPreviewRenderer(client);
+        this.itemCatalog = new ClientItemCatalog(client);
+        this.itemPreviews = new ItemPreviewRenderer(client);
         this.catalogStore = null;
-        this.conversation = () -> new UUID(0, 0); this.publishPreview = ignored -> {};
+        this.planSessionId = () -> new UUID(0, 0); this.publishPreview = ignored -> {};
         this.planPreviews = new PlanPreviewRenderer(client);
     }
 
@@ -73,13 +78,14 @@ public final class BuilderBridgeDataSource implements BridgeDataSource {
     public BuilderBridgeDataSource(MinecraftClient client, Supplier<Optional<WorldSnapshot>> snapshots,
                                    Supplier<Optional<Bounds>> selection, LongSupplier worldGeneration,
                                    Supplier<String> worldIdentity, WorldCapture capture, Executor io, Path builderDirectory,
-                                   Supplier<UUID> conversation, Consumer<BuildPlan> publishPreview) {
+                                   Supplier<UUID> planSessionId, Consumer<BuildPlan> publishPreview) {
         this.client = Objects.requireNonNull(client); this.snapshots = Objects.requireNonNull(snapshots);
         this.selection = Objects.requireNonNull(selection); this.worldGeneration = Objects.requireNonNull(worldGeneration);
         this.worldIdentity = Objects.requireNonNull(worldIdentity); this.capture = Objects.requireNonNull(capture);
         this.io = Objects.requireNonNull(io); this.blockCatalog = new ClientBlockCatalog(client);
-        this.blockPreviews = new BlockPreviewRenderer(client); this.catalogStore = new BlockCatalogStore(builderDirectory);
-        this.conversation = Objects.requireNonNull(conversation); this.publishPreview = Objects.requireNonNull(publishPreview);
+        this.blockPreviews = new BlockPreviewRenderer(client); this.itemCatalog = new ClientItemCatalog(client);
+        this.itemPreviews = new ItemPreviewRenderer(client); this.catalogStore = new BlockCatalogStore(builderDirectory);
+        this.planSessionId = Objects.requireNonNull(planSessionId); this.publishPreview = Objects.requireNonNull(publishPreview);
         this.planPreviews = new PlanPreviewRenderer(client);
     }
 
@@ -92,7 +98,7 @@ public final class BuilderBridgeDataSource implements BridgeDataSource {
             PlanContract contract = planCodec.decode(request.payload());
             var validator = new PlanPreconditionValidator(new MinecraftPlanRules()::test,
                 new MinecraftPlanRules()::isAirState, new MinecraftPlanRules()::hasUnsupportedBlockEntity);
-            var result = validator.validate(contract, snapshot, conversation.get());
+            var result = validator.validate(contract, snapshot, planSessionId.get());
             JsonObject payload = new JsonObject(); payload.addProperty("valid", result.valid());
             payload.addProperty("planId", contract.id().toString()); payload.addProperty("planRevision", contract.revision());
             payload.addProperty("places", result.placeCount()); payload.addProperty("replacements", result.replaceCount());
@@ -118,7 +124,7 @@ public final class BuilderBridgeDataSource implements BridgeDataSource {
                 pendingPlan = null;
                 throw new IllegalStateException("Plan is valid, but schematic preview could not be rendered: " + unavailable.getMessage(), unavailable);
             }
-            pendingPlan = new PendingPlan(token, contract, preview, conversation.get(), generation, snapshot.revision());
+            pendingPlan = new PendingPlan(token, contract, preview, planSessionId.get(), generation, snapshot.revision());
             payload.addProperty("validationToken", token);
             return ok(request, generation, snapshot.revision(), payload.toString(), Base64.getEncoder().encodeToString(png));
         });
@@ -132,7 +138,7 @@ public final class BuilderBridgeDataSource implements BridgeDataSource {
             if (pending == null || request.validationToken() == null || !pending.token().equals(request.validationToken()))
                 throw new IllegalStateException("No matching validated plan; inspect it again");
             if (pending.generation() != generation || pending.revision() != snapshot.revision()
-                || !pending.conversation().equals(conversation.get())) {
+                || !pending.planSessionId().equals(planSessionId.get())) {
                 pendingPlan = null; throw new IllegalStateException("Validated plan is stale; inspect the current snapshot again");
             }
             publishPreview.accept(pending.preview());
@@ -160,7 +166,7 @@ public final class BuilderBridgeDataSource implements BridgeDataSource {
     }
 
     private boolean current(PendingPlan plan, long generation, long revision) {
-        return plan.generation() == generation && plan.revision() == revision && plan.conversation().equals(conversation.get());
+        return plan.generation() == generation && plan.revision() == revision && plan.planSessionId().equals(planSessionId.get());
     }
 
     @Override public CompletionStage<BridgeProtocol.Response> status(BridgeProtocol.Request request) {
@@ -273,6 +279,64 @@ public final class BuilderBridgeDataSource implements BridgeDataSource {
             payload.add("defaultState", defaults); payload.addProperty("hasBlockEntity", details.hasBlockEntity());
             return ok(request, generation, scansRevision(), payload.toString(), Base64.getEncoder().encodeToString(preview.bytes()));
         });
+    }
+
+    @Override public CompletionStage<BridgeProtocol.Response> listItemMods(BridgeProtocol.Request request) {
+        return onClient(request, generation -> {
+            ItemCatalog.ModPage page = itemCatalog.snapshot().listMods(request.page());
+            JsonObject payload = new JsonObject(); var items = new com.google.gson.JsonArray();
+            for (var mod : page.mods()) {
+                JsonObject item = new JsonObject(); item.addProperty("namespace", mod.namespace());
+                item.addProperty("name", mod.label()); item.addProperty("items", mod.itemCount()); items.add(item);
+            }
+            payload.add("mods", items); payload.addProperty("total", page.total());
+            if (page.nextPage() != null) payload.addProperty("nextPage", page.nextPage());
+            return ok(request, generation, scansRevision(), payload.toString(), null);
+        });
+    }
+
+    @Override public CompletionStage<BridgeProtocol.Response> searchItems(BridgeProtocol.Request request) {
+        return onClient(request, generation -> {
+            Optional<String> namespace = Optional.ofNullable(request.namespace());
+            ItemCatalog.ItemPage page = itemCatalog.snapshot().search(Objects.requireNonNullElse(request.query(), ""), namespace, request.page());
+            JsonObject payload = new JsonObject(); var items = new com.google.gson.JsonArray();
+            for (var entry : page.items()) items.add(itemJson(entry));
+            payload.add("items", items); payload.addProperty("total", page.total());
+            if (page.nextPage() != null) payload.addProperty("nextPage", page.nextPage());
+            return ok(request, generation, scansRevision(), payload.toString(), null);
+        });
+    }
+
+    @Override public CompletionStage<BridgeProtocol.Response> describeItem(BridgeProtocol.Request request) {
+        return onClient(request, generation -> {
+            if (request.itemId() == null || request.itemId().length() > 256)
+                throw new IllegalArgumentException("Exact item ID is required");
+            ItemCatalog.ItemEntry details = itemCatalog.describe(request.itemId())
+                .orElseThrow(() -> new IllegalArgumentException("Unknown exact item ID"));
+            Optional<BlockPreviewRenderer.PreviewPng> preview;
+            String previewState;
+            try {
+                preview = itemPreviews.renderNow(details.id());
+                previewState = preview.isPresent() ? "inventory-default" : "missing-model";
+            } catch (IOException unavailable) { preview = Optional.empty(); previewState = "unavailable"; }
+            return itemDescriptionResponse(request, generation, scansRevision(), details, preview, previewState);
+        });
+    }
+
+    private static JsonObject itemJson(ItemCatalog.ItemEntry entry) {
+        JsonObject item = new JsonObject(); item.addProperty("id", entry.id()); item.addProperty("namespace", entry.namespace());
+        item.addProperty("name", entry.label()); item.addProperty("class", entry.itemClass());
+        item.addProperty("maxStackCount", entry.maxStackCount()); item.addProperty("maxDamage", entry.maxDamage());
+        return item;
+    }
+
+    static BridgeProtocol.Response itemDescriptionResponse(BridgeProtocol.Request request, long generation, long revision,
+                                                            ItemCatalog.ItemEntry details,
+                                                            Optional<BlockPreviewRenderer.PreviewPng> preview,
+                                                            String previewState) {
+        JsonObject payload = itemJson(details); payload.addProperty("previewState", previewState);
+        String image = preview.map(value -> Base64.getEncoder().encodeToString(value.bytes())).orElse(null);
+        return ok(request, generation, revision, payload.toString(), image);
     }
 
     private long scansRevision() { return snapshots.get().map(WorldSnapshot::revision).orElse(0L); }

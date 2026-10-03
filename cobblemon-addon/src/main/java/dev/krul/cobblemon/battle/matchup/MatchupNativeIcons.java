@@ -109,9 +109,8 @@ public final class MatchupNativeIcons {
                 ? assets.poser.invoke(profile.resolver, profile.state) : null;
             if (sprite == null && model == null) return false;
             if (model != null) {
-                if (api.cleanup.currentState.invoke(model) != null || api.cleanup.buffer.invoke(model) != null) return false;
-                Object layers = api.cleanup.currentLayers.invoke(model);
-                if (!(layers instanceof Iterable<?> iterable) || iterable.iterator().hasNext()) return false;
+                if (!idleLayerContext(api.cleanup.currentState.invoke(model), api.cleanup.buffer.invoke(model),
+                    api.cleanup.currentLayers.invoke(model))) return false;
             }
             previousContext = model == null ? null : api.cleanup.context.get(model);
         } catch (ReflectiveOperationException | RuntimeException | LinkageError ignored) {
@@ -216,6 +215,12 @@ public final class MatchupNativeIcons {
         return rect != null && rect.width() > 0 && rect.height() > 0
             && (long) rect.x() + rect.width() <= Integer.MAX_VALUE
             && (long) rect.y() + rect.height() <= Integer.MAX_VALUE;
+    }
+
+    static boolean idleLayerContext(Object currentState, Object buffer, Object layers) {
+        if (currentState != null || buffer != null) return false;
+        if (layers == null) return true; // Newly created Cobblemon models initialize this transient field lazily.
+        return layers instanceof Iterable<?> iterable && !iterable.iterator().hasNext();
     }
 
     private static void restoreMatrices(MatrixStack matrices, MatrixStack.Entry previous) {

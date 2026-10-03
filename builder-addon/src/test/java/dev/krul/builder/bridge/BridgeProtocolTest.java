@@ -9,7 +9,7 @@ import static org.junit.jupiter.api.Assertions.*;
 class BridgeProtocolTest {
     @Test void roundTripsSupportedVersionedRequest() throws Exception {
         var request = new BridgeProtocol.Request(BridgeProtocol.VERSION, "r1", BridgeProtocol.Method.STATUS,
-            null, 0, 0, 0, 0, null);
+            null, 0, 0, 0, 0);
         assertEquals(request, BridgeProtocol.decodeRequest(BridgeProtocol.encodeRequest(request)));
     }
 
@@ -23,6 +23,17 @@ class BridgeProtocolTest {
         assertThrows(IllegalArgumentException.class, () -> BridgeProtocol.decodeRequest(" ".repeat(BridgeProtocol.MAX_JSON_BYTES + 1)));
     }
 
+    @Test void rejectsRetiredPairingTokenField() {
+        String json = "{\"version\":1,\"id\":\"r1\",\"method\":\"STATUS\",\"bounds\":null,\"page\":0,\"pageSize\":0,\"expectedWorldGeneration\":0,\"expectedSnapshotRevision\":0,\"token\":\"old-secret\"}";
+        assertThrows(IllegalArgumentException.class, () -> BridgeProtocol.decodeRequest(json));
+    }
+
+    @Test void exactItemIdSurvivesTheStrictProtocolCodec() {
+        var request = new BridgeProtocol.Request(1, "item-1", BridgeProtocol.Method.DESCRIBE_ITEM,
+            null, 0, 0, 1, 0, null, null, null, "mod:item", null, null);
+        assertEquals(request, BridgeProtocol.decodeRequest(BridgeProtocol.encodeRequest(request)));
+    }
+
     @Test void responseAlwaysCarriesWorldGenerationAndSnapshotRevision() {
         var response = new BridgeProtocol.Response(BridgeProtocol.VERSION, "r1", true, 3, 8, "ok", null, null);
         var decoded = BridgeProtocol.decodeResponse(BridgeProtocol.encodeResponse(response));
@@ -32,7 +43,7 @@ class BridgeProtocolTest {
 
     @Test void roundTripsStrictPlanPayloadAndSingleUseValidationToken() {
         var request = new BridgeProtocol.Request(BridgeProtocol.VERSION, "plan-1", BridgeProtocol.Method.PUBLISH_PLAN,
-            null, 0, 0, 4, 9, null, null, null, null, "opaque-validation-token", null);
+            null, 0, 0, 4, 9, null, null, null, null, null, "opaque-validation-token");
         var decoded = BridgeProtocol.decodeRequest(BridgeProtocol.encodeRequest(request));
         assertEquals(request, decoded);
         assertThrows(IllegalArgumentException.class, () -> BridgeProtocol.decodeRequest(

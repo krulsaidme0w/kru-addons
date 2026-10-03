@@ -11,20 +11,16 @@ Cobblemon builds are not guaranteed to be compatible.
 | --- | --- | --- |
 | KRU Cobblemon | Discovery, Dungeon Discovery, Type Chart, Battle Matchups, UI Utils, PC Organizer | Yes |
 | KRU Tools | Selective Packet Delay with manual send/discard | No |
-| KRU Builder | Experimental client-side build planning and manual hologram | No |
+| KRU Builder | Bounded world scan, local MCP bridge and plan preview | No |
 
 The addons do not depend on one another. Meteor is external and unmodified;
 no Meteor fork or Cobblemon binary is distributed here.
 
-KRU Builder is experimental. It reads a bounded selection and prepares a
-proposal for the player to inspect and accept; it never places/breaks blocks,
-moves the player, or sends server commands. Before confirmation, the UI shows
-the context and images prepared for a request. Confirming sends the text,
-selected-area block data, and visible images to Codex through the configured
-native-OS CLI. Do not include private builds or screenshots you do not want to
-send to the model provider. The CLI uses a separate Builder-owned Codex profile;
-it does not copy the regular Codex login or configuration. See
-[Builder setup and privacy](builder-addon/README.md).
+KRU Builder starts a local MCP bridge, scans only an explicitly selected and
+loaded world region, and renders externally authored, validated plans as
+previews. It has no embedded chat or model client and never places blocks,
+moves the player, or sends server commands. See
+[Builder setup and operation](builder-addon/README.md).
 
 ## Installation
 

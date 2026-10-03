@@ -15,9 +15,18 @@ public record PcOrganizerPreparation(PcOrganizerSnapshot before, PcOrganizerSnap
         Set<Integer> projectedPins = new HashSet<>();
         pinned.forEach(box -> projectedPins.add(order.indexOf(box)));
         var collection = PcCollectionPlanner.plan(projected, projectedPins);
+        var collectionRoles = new EnumMap<PcOrganizerBoxRole, Integer>(PcOrganizerBoxRole.class);
+        for (int box = 0; box < projected.boxCount(); box++) {
+            String name = PcOrganizerLayoutPlanner.normalize(projected.boxNames().get(box))
+                .replaceFirst(" [1-9][0-9]*(?:/[1-9][0-9]*)?$", "");
+            if (name.equals("MAIN")) collectionRoles.putIfAbsent(PcOrganizerBoxRole.MAIN, box);
+            else if (name.equals("UTILITY")) collectionRoles.putIfAbsent(PcOrganizerBoxRole.UTILITY, box);
+            else if (name.equals("TRADE")) collectionRoles.putIfAbsent(PcOrganizerBoxRole.TRADE, box);
+            else if (name.equals("BREEDING")) collectionRoles.putIfAbsent(PcOrganizerBoxRole.BREEDING, box);
+        }
         var settings = new PcOrganizerSettings(PcOrganizerRunMode.APPLY, PcOrganizerFilter.empty(),
             PcOrganizerSortKey.SPECIES, PcOrganizerSortKey.IV_TOTAL, PcOrganizerSortKey.ORIGINAL_SLOT,
-            new PcOrganizerBoxPolicy(before.boxCount(), collection.protectedBoxes(), Map.of()));
+            new PcOrganizerBoxPolicy(before.boxCount(), projectedPins, collectionRoles));
         Map<UUID, PcOrganizerPokemon> original = new HashMap<>();
         projected.pokemon().forEach(p -> original.put(p.uuid(), p));
         var moves = new ArrayList<PcOrganizerPlan.Move>();

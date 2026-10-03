@@ -1,160 +1,56 @@
-# KRU Builder (experimental)
+# KRU Builder
 
-KRU Builder is an experimental, client-side planning and hologram addon for
-Minecraft 1.21.1, Fabric, Java 21 and official Meteor Client 0.5.8. It does not
-require Cobblemon or Academy. The interface reuses Meteor's UI and does not
-modify Meteor core.
+KRU Builder is a client-side world-inspection and preview addon for Minecraft
+1.21.1, Fabric, Java 21 and Meteor Client 0.5.8. It has no embedded chat or
+model client: the addon starts a loopback bridge, scans the selected region on
+request, and renders validated plans supplied by the separate MCP server.
 
-## Start safely
+## Use
 
-1. Install the official Meteor client and this addon's binary JAR in a separate
-   test instance. Do not install the sources JAR.
-2. Enable Builder in Meteor, open its chat, and set both area corners numerically
-   under **Settings**. Apply saves the bounds for this world/server and dimension.
-   Restoring bounds does not scan or send anything.
-   Only already-loaded client chunks are read. An unloaded or unavailable cell
-   remains unknown; an incomplete scan cannot be accepted as a complete plan.
-3. Choose **Connect / sign in** using a native Codex CLI executable on the
-   same operating system as Minecraft, then use **Sign in with Codex** for the
-   Builder-owned profile. Builder requires exactly `codex-cli 0.153.4` and
-   fails closed if the installed protocol or effective configuration is not
-   compatible. It does not copy the regular Codex login/configuration. No WSL
-   fallback is attempted; Windows installations may need the direct
-   `codex.exe` executable path in Builder's module settings.
-   With the default `codex` setting, Builder first uses an explicitly installed
-   instance-local `kru-builder/bin/codex.exe` on Windows (`bin/codex` on other
-   systems). Explicit executable settings are never overridden. Builder does
-   not download executables or modify your global Codex installation.
-4. Write a request and choose **Send**. This action refreshes the bounded
-   local scan, captures a world screenshot, checks the context again and sends
-   the request without another confirmation dialog.
-   Use **+ Image** to reveal the optional reference PNG path; Builder copies the file
-   into its private attachment store and leaves the original untouched. Remove
-   unwanted references before sending. Each request replaces the previous automatic
-   world screenshot while retaining selected reference images.
-5. A valid returned proposal appears automatically as a hologram. **Save plan**
-   persists it as the active project. The addon renders guidance; the player places or removes blocks
-   manually. Reopen a saved project only when deliberately choosing it for the
-   current selection/world.
+1. Enable Builder. It starts the loopback bridge and opens the bounds window.
+2. Enter six numeric coordinates. After the values stop changing briefly,
+   valid bounds are saved per world/server and dimension and scanned
+   automatically. Editing bounds immediately invalidates the prior snapshot.
+3. Start the separate `builder-mcp-server`/Codex MCP integration on the same
+   machine. It connects to the already-running local bridge automatically; no
+   in-game pairing or scan action is needed.
+4. Ask the external agent to inspect the area, block/item catalogs and prepare
+   a staged plan. The addon validates and displays it as a hologram preview
+   only.
 
-The main window keeps the conversation and current action together.
-**Settings** contains saved numeric bounds, connection details and saved
-project reopening; **Back to chat** preserves the entered request. Failed
-requests show a short status in the window and report the full error once in
-local game chat. Stage and progress controls appear when a proposal is available.
+The minimal panel contains only bounds, dimensions, scan status and local MCP
+bridge status. Use the `open-builder` keybind to reopen it. Scan errors and
+invalid bounds are reported in the panel and local game log.
 
-## Data and privacy
+## Local bridge and data
 
-Codex runs as a local process, but requests use the configured model
-provider and are not offline. **Send** authorizes capture and transmission;
-there is no separate disclosure or approval dialog in the game UI.
-A request can include your text, the
-selected area's block IDs and state properties, unknown-cell locations, the
-current accepted plan, and every image still visible in the attachment list.
-When the model asks, Builder can also send bounded pages of local block registry
-IDs/names and one requested block's allowed state values plus a 128×128-or-smaller
-inventory-model preview. These catalog tools inspect no world, inventory,
-containers or files; results and previews are sent to the configured model
-provider only in response to its request.
-The world screenshot is captured before HUD rendering; names or signs visible
-in the world itself can still appear. Reference images are opt-in. Inventory,
-chat, containers and arbitrary block-entity data are not included.
+The bridge binds only to `127.0.0.1:47653`, rejects non-loopback peers, and
+does not use an Allow/pairing token. This intentionally trusts processes on the
+same computer; it is not a LAN service. It exposes the complete bounded scan,
+paged block and item catalogs (with client-rendered icons where available),
+and plan validation/preview endpoints. MCP plan history is owned by the
+separate server under the OS application-data directory; the addon does not
+save conversations or projects.
 
-Opening the window, applying/restoring bounds and connecting do not send a build
-request. **Cancel request** stops pending preparation or the owned request
-process; a request already accepted by the provider may already have been
-transmitted.
+An explicit MCP capture request can capture the current world framebuffer;
+the temporary PNG is deleted after the bridge returns it. The screenshot can
+include visible names/signs. No data is sent to a remote provider by the addon;
+the external MCP client controls its own model communication.
 
-Builder keeps project files under the Minecraft instance's `kru-builder/projects`
-directory and temporary images under `kru-builder/attachments`. Its Codex
-profile uses a separate `kru-builder/codex-profile` tree, with an addon-owned
-Codex home and empty working directory beneath it. The child process receives
-an allowlisted environment and does not inherit the regular Codex home, auth,
-configuration or provider tokens. Builder does not read/copy those stores.
-Review and protect the instance data according to your needs. Do not commit it
-or share it unintentionally.
+## Limits and safety
 
-Builder's isolated policy enables the Codex Code Mode host runtime needed to
-route its fixed, read-only local block-catalog tools and pins
-`features.code_mode=false`. The selected model can still require a particular
-tool mode, so the host runtime is available for that protocol. Shell/file
-tools, MCP integrations, plugins, apps, hooks, web search, skills/instructions
-and network access remain disabled for the model thread. It requires the
-expected read-only sandbox and `never` approval policy before a request.
-Unsupported or uninspectable policy state, missing
-login, incompatible model/image capability, stale world state, and unavailable
-world facts are shown as unavailable/errors and block the dependent action.
-No credentials or login are needed in CI; tests use synthetic process frames.
+- At most **32,768 selected cells** and **2,048 cell reads per game tick**.
+- Only loaded client-world cells are observed. Unknown/unloaded cells are not
+  treated as air.
+- A world/session or selection change invalidates the snapshot and preview;
+  matching saved bounds are automatically rescanned after reconnect.
+- The addon never places or breaks blocks, moves the player/camera, edits
+  inventory, changes movement keys, or issues server commands.
 
-## Limits and behavior
-
-- At most **32,768 selected cells**; at most **2,048 cell reads per game tick**.
-  Only loaded client-world cells are observed.
-- A plan can contain at most **32,768 distinct targets** and **4,096
-  operations**. Operations are validated locally against the selection and
-  current block registry before they are shown as proposals.
-- At most **4 PNG images**, each at most **1,280 pixels on either edge**, with
-  **8 MiB combined encoded input**. The image limits can be lower than the
-  Codex protocol's per-turn transport limits.
-- A project file is versioned and limited to **8 MiB**. Reopening it is an
-  explicit action and requires validation for the current selection and block
-  registry. A world/server change invalidates live context; saved plans are not
-  silently carried into a new world.
-- Unknown/unloaded cells are never treated as air. A stale scan, changed
-  selection, changed world, unsupported block state, or invalid plan prevents
-  acceptance until refreshed or corrected.
-- Builder never places or breaks blocks, changes movement keys, moves the
-  player/camera, issues server commands, or automates world edits. It grants no
-  server permissions and does not require OP.
-
-These limits and safeguards are code-level behavior, not a claim of tested live
-Minecraft compatibility. See the [runtime checklist](../docs/builder-runtime-checklist.md).
-
-## Optional Codex MCP companion and plan history
-
-The separate `builder-mcp-server` companion lets Codex inspect the explicitly
-selected region, query the active modded block catalog a page at a time (with
-Minecraft-rendered block thumbnails), inspect screenshots, validate a staged
-plan, and publish an approved plan as a Builder hologram preview. It is a
-separate process; it does not replace the in-game Builder UI. Pair it through
-Builder Settings and explicitly approve the local connection in Minecraft.
-
-Build/package the companion and its repository-local Codex plugin with:
+The separate MCP server can be built and packaged with:
 
 ```sh
 (cd builder-addon && ./gradlew -p ../builder-mcp-server test packageForCodexPlugin)
 ```
 
-This creates an ignored JAR under
-`.agents/plugins/plugins/builder-minecraft/server/`. The plugin source and
-repo-local marketplace definition are available at
-`.agents/plugins/marketplace.json`; they are not automatically installed or
-enabled. The plugin's MCP process must run on the same machine as Minecraft so
-it can reach the loopback bridge. Java 21 is required.
-
-Codex keeps its own conversation history. The companion does not copy or
-archive chat transcripts; it separately stores up to 100 bounded plan revisions
-and their validation/snapshot evidence under the OS application-data directory:
-`$XDG_DATA_HOME/kru-builder/plan-archive` (or
-`~/.local/share/kru-builder/plan-archive`),
-`~/Library/Application Support/kru-builder/plan-archive` on macOS, and
-`%LOCALAPPDATA%/kru-builder/plan-archive` on Windows. The local viewer is served
-on loopback at a tokenized URL returned by `open_plan_viewer`; it has a
-read-only plan timeline and ID-color schematic, not exact modded model geometry.
-Historical proposals are re-inspected against a fresh scan before reuse.
-Publishing a plan changes only the in-game preview. Placing/removing blocks,
-automated movement, inventory edits and chat-command execution are not
-implemented.
-
-## Build and package
-
-```sh
-(cd builder-addon && bash ./gradlew --no-daemon build)
-python3 -m unittest discover -s distribution -v
-python3 distribution/release.py builder-addon
-```
-
-The independent artifact is `kru-builder-<version>.jar`; the sources JAR,
-`LICENSE`, `NOTICE`, `THIRD_PARTY.md` and `SHA256SUMS` accompany the packaged
-binary. Builder has its own Gradle root, namespace and CI matrix entry. A
-`builder-vX.Y.Z` tag routes to this addon; tag builds create drafts only.
+See the [live runtime checklist](../docs/builder-runtime-checklist.md).

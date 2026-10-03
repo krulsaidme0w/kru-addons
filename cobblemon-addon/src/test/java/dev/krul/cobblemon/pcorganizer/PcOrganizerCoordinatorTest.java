@@ -41,6 +41,34 @@ class PcOrganizerCoordinatorTest {
         assertEquals(1, port.moves.size());
     }
 
+    @Test void collectionPreviewCanSortInsideTradeBoxWithoutCrossingItsBoundary() {
+        var before = tradeSnapshot(A, B);
+        var target = swappedTradeTarget(before);
+        var protectedTrade = new PcOrganizerSettings(PcOrganizerRunMode.APPLY, PcOrganizerFilter.empty(),
+            PcOrganizerSortKey.SPECIES, PcOrganizerSortKey.IV_TOTAL, PcOrganizerSortKey.ORIGINAL_SLOT,
+            PcOrganizerBoxPolicy.forSnapshot(before, Set.of(), null));
+        var port = new Port();
+        var coordinator = new PcOrganizerCoordinator(protectedTrade, port, target);
+
+        var result = coordinator.tick(before, 1);
+
+        assertEquals(PcOrganizerCoordinator.Status.REQUESTED, result.status(), result.reason());
+        assertEquals(1, port.moves.size());
+        assertEquals(0, port.moves.getFirst().fromBox());
+        assertEquals(0, port.moves.getFirst().toBox());
+    }
+
+    @Test void explicitlyPinnedTradeBoxStillCannotBeSorted() {
+        var before = tradeSnapshot(A, B);
+        var target = swappedTradeTarget(before);
+        var pinnedTrade = new PcOrganizerSettings(PcOrganizerRunMode.APPLY, PcOrganizerFilter.empty(),
+            PcOrganizerSortKey.SPECIES, PcOrganizerSortKey.IV_TOTAL, PcOrganizerSortKey.ORIGINAL_SLOT,
+            PcOrganizerBoxPolicy.forSnapshot(before, Set.of(0), null));
+        var coordinator = new PcOrganizerCoordinator(pinnedTrade, new Port(), target);
+
+        assertEquals(PcOrganizerCoordinator.Status.BLOCKED, coordinator.tick(before, 1).status());
+    }
+
     private static PcOrganizerSettings settings(PcOrganizerRunMode mode) {
         return new PcOrganizerSettings(mode, PcOrganizerFilter.empty(), PcOrganizerSortKey.SPECIES,
             PcOrganizerSortKey.IV_TOTAL, PcOrganizerSortKey.ORIGINAL_SLOT,
@@ -50,6 +78,15 @@ class PcOrganizerCoordinatorTest {
     private static PcOrganizerSnapshot snapshot(UUID first, UUID second) {
         return new PcOrganizerSnapshot(STORE, 1, List.of("Box"), List.of(
             pokemon(first, 0, "zubat"), pokemon(second, 1, "abra")));
+    }
+    private static PcOrganizerSnapshot tradeSnapshot(UUID first, UUID second) {
+        return new PcOrganizerSnapshot(STORE, 1, List.of("TRADE"), List.of(
+            pokemon(first, 0, "zubat"), pokemon(second, 1, "abra")));
+    }
+    private static PcOrganizerSnapshot swappedTradeTarget(PcOrganizerSnapshot before) {
+        return new PcOrganizerSnapshot(STORE, 1, before.boxNames(), List.of(
+            PcOrganizerPreparation.position(before.pokemon().get(1), 0, 0),
+            PcOrganizerPreparation.position(before.pokemon().get(0), 0, 1)));
     }
     private static PcOrganizerPokemon pokemon(UUID id, int slot, String species) {
         return new PcOrganizerPokemon(id, 0, slot, species, "", "", false, false, "", "", "", 1, 0, 0);

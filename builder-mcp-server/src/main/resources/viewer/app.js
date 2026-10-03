@@ -11,6 +11,7 @@ const ui = {
   stage: $("stage-select"), layer: $("layer-range"), layerOutput: $("layer-output"), allLayers: $("all-layers"), zoom: $("zoom-range"),
   reset: $("reset-camera"), state: $("validation-state"), counts: $("plan-counts"), preview: $("plan-preview"), previewEmpty: $("preview-empty"),
   notes: $("validation-notes"), timeline: $("stage-timeline"), toast: $("toast"), inspector: $("cell-inspector"),
+  architecture: $("architecture-review"), cameraButtons: [...document.querySelectorAll(".camera-button")],
 };
 let summaries = [], active = null, report = null, snapshot = null, contract = null, angle = Math.PI / 4;
 let hovered = null, points = [], drag = null, frame = 0, toastTimer = 0;
@@ -23,11 +24,11 @@ async function requestJson(url) {
 
 async function loadHistory() {
   ui.historyError.hidden = true;
-  ui.connection.textContent = "Reading local archive";
+  ui.connection.textContent = "Reading visual ideas";
   try {
     summaries = await requestJson(api("plans"));
     ui.count.textContent = String(summaries.length);
-    ui.connection.textContent = "Loopback · read only";
+    ui.connection.textContent = "Loopback · visual only";
     listElement.replaceChildren();
     ui.historyEmpty.hidden = summaries.length !== 0;
     for (const summary of summaries) {
@@ -51,18 +52,18 @@ async function loadHistory() {
 }
 
 async function loadPlan(id) {
-  ui.connection.textContent = "Loading plan revision";
+  ui.connection.textContent = "Loading visual direction";
   try {
     active = await requestJson(api(`plans/${encodeURIComponent(id)}`));
     contract = JSON.parse(active.planJson);
     report = JSON.parse(active.validationJson || "{}");
     snapshot = active.snapshotJson ? JSON.parse(active.snapshotJson) : null;
     renderDetails(); renderTimeline(); updateLayerLimits();
-    ui.connection.textContent = "Loopback · read only"; ui.empty.hidden = Boolean(snapshot?.cells?.length);
+    ui.connection.textContent = "Loopback · visual only"; ui.empty.hidden = Boolean(snapshot?.cells?.length);
     hovered = null; showNoHover(); scheduleDraw(); await loadHistory();
   } catch (error) {
     active = null; snapshot = null; contract = null; report = null;
-    ui.title.textContent = "Could not load plan"; ui.meta.textContent = error.message;
+    ui.title.textContent = "Could not load visual direction"; ui.meta.textContent = error.message;
     ui.connection.textContent = "Archive read failed"; ui.empty.hidden = false;
     ui.historyError.textContent = `${error.message} Refresh the archive and try again.`; ui.historyError.hidden = false;
     scheduleDraw();
@@ -75,7 +76,7 @@ function renderDetails() {
   const region = snapshot ? `${snapshot.total ?? snapshot.cells?.length ?? 0} cells · snapshot r${active.snapshotRevision}` : "Region snapshot was not archived";
   ui.meta.textContent = `${region} · ${Number.isNaN(date.getTime()) ? "unknown time" : date.toLocaleString()} · ${active.worldIdentity}`;
   const valid = report.valid === true;
-  ui.state.textContent = valid ? "Validated" : report.valid === false ? "Rejected" : "No report";
+  ui.state.textContent = valid ? "Ready" : report.valid === false ? "Needs a rethink" : "No notes";
   ui.state.className = `state-tag ${valid ? "valid" : report.valid === false ? "invalid" : ""}`;
   const count = (key) => Number.isFinite(report[key]) ? report[key] : "—";
   const unknown = snapshot?.cells?.filter((cell) => cell.unknown).length ?? "—";
@@ -85,10 +86,20 @@ function renderDetails() {
     ui.preview.src = `data:image/png;base64,${active.previewPngBase64}`; ui.preview.hidden = false; ui.previewEmpty.hidden = true;
   } else { ui.preview.removeAttribute("src"); ui.preview.hidden = true; ui.previewEmpty.hidden = false; }
   ui.notes.replaceChildren();
+  const architecture = report.architectureReview;
+  if (architecture && ui.architecture) {
+    ui.architecture.replaceChildren();
+    const score = document.createElement("strong"); score.textContent = architecture.publishable ? "Strong direction" : "Needs another visual pass";
+    score.className = architecture.publishable ? "review-good" : "review-bad";
+    ui.architecture.append(score);
+    for (const note of [...(architecture.passed ?? []), ...(architecture.warnings ?? [])].slice(0, 6)) {
+      const item = document.createElement("div"); item.className = "review-warning"; item.textContent = `• ${note}`; ui.architecture.append(item);
+    }
+  } else if (ui.architecture) ui.architecture.textContent = "No visual review saved.";
   const diagnostics = Array.isArray(report.diagnostics) ? report.diagnostics : [];
   if (!diagnostics.length) {
     const note = document.createElement("li"); note.className = "muted-note";
-    note.textContent = valid ? "All block states and exact transition preconditions were validated against this snapshot." : "No validation diagnostics were saved.";
+    note.textContent = valid ? "The visual direction is grounded in the current Minecraft snapshot." : "No visual notes were saved.";
     ui.notes.append(note);
   } else for (const diagnostic of diagnostics.slice(0, 100)) {
     const note = document.createElement("li");
@@ -99,6 +110,7 @@ function renderDetails() {
     const note = document.createElement("li"); note.textContent = `${report.omittedDiagnostics} additional diagnostics omitted.`; ui.notes.append(note);
   }
   ui.reset.disabled = false; ui.stage.disabled = false; ui.layer.disabled = false; ui.allLayers.disabled = false; ui.zoom.disabled = false;
+  ui.cameraButtons.forEach((button) => { button.disabled = false; });
 }
 
 function renderTimeline() {
@@ -287,6 +299,9 @@ ui.layer.addEventListener("input", () => { ui.allLayers.checked = false; updateL
 ui.allLayers.addEventListener("change", () => { updateLayerLabel(); hovered = null; scheduleDraw(); });
 ui.zoom.addEventListener("input", scheduleDraw);
 ui.reset.addEventListener("click", () => { angle = Math.PI / 4; ui.zoom.value = "100"; scheduleDraw(); showToast("Camera view reset"); });
+ui.cameraButtons.forEach((button) => button.addEventListener("click", () => {
+  angle = Number(button.dataset.angle); hovered = null; showNoHover(); scheduleDraw(); showToast(`${button.textContent} camera`);
+}));
 $("reload-history").addEventListener("click", loadHistory);
 new ResizeObserver(scheduleDraw).observe($("scene-wrap"));
 window.addEventListener("resize", scheduleDraw);

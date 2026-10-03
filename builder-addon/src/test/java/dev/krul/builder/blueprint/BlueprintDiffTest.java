@@ -60,6 +60,19 @@ class BlueprintDiffTest {
         assertThrows(IllegalArgumentException.class, () -> new BlueprintDiff.Selection(null, -1));
     }
 
+    @Test void completePreviewIncludesTargetsFromEveryStage() {
+        var base = new Cell(0, 0, 0); var roof = new Cell(1, 1, 0); var light = new Cell(2, 1, 0);
+        var plan = plan(stage("base", Map.of(base, STONE)), stage("roof", Map.of(roof, STONE)),
+            stage("lighting", Map.of(light, STONE)));
+        var snapshot = world(Map.of(BOUNDS.min(), AIR, new Cell(11, 65, -5), AIR,
+            new Cell(12, 65, -5), AIR), Set.of());
+
+        var preview = BlueprintDiff.cells(plan, snapshot, BlueprintDiff.Selection.completePlan());
+
+        assertEquals(List.of(base, roof, light), preview.stream().map(BlueprintDiff.Difference::relative).toList());
+        assertTrue(preview.stream().allMatch(cell -> cell.kind() == BlueprintDiff.Kind.PLACE));
+    }
+
     @Test void unvalidatedOversizedOrConflictingInputIsRejectedBeforeDiffing() {
         var many = new HashMap<Cell, StateKey>();
         for (int x = 0; x <= PlanValidator.MAX_TARGETS; x++) many.put(new Cell(x, 0, 0), STONE);

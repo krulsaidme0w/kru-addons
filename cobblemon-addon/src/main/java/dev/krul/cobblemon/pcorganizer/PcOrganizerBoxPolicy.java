@@ -23,18 +23,17 @@ public record PcOrganizerBoxPolicy(int boxCount, Set<Integer> explicitProtected,
     public boolean isProtected(int box) { return protectedIndexes().contains(box); }
 
     public static PcOrganizerBoxPolicy forSnapshot(PcOrganizerSnapshot snapshot, Set<Integer> explicit, Integer currentBox) {
-        Set<Integer> excluded = new HashSet<>(explicit);
+        Set<Integer> explicitIndexes = new HashSet<>(explicit);
         Map<PcOrganizerBoxRole, Integer> roles = new EnumMap<>(PcOrganizerBoxRole.class);
         for (int i = 0; i < snapshot.boxCount(); i++) {
             String name = PcOrganizerLayoutPlanner.normalize(snapshot.boxNames().get(i));
             for (var role : PcOrganizerBoxRole.values()) if (role.name().equals(name)) {
-                excluded.add(i); // Protect every matching box, including duplicate names.
-                roles.putIfAbsent(role, i);
+                if (roles.putIfAbsent(role, i) != null) explicitIndexes.add(i);
             }
-            if (currentBox != null && currentBox != i) excluded.add(i);
+            if (currentBox != null && currentBox != i) explicitIndexes.add(i);
         }
         if (currentBox != null) checkIndex(currentBox, snapshot.boxCount(), "current box");
-        return new PcOrganizerBoxPolicy(snapshot.boxCount(), excluded, roles);
+        return new PcOrganizerBoxPolicy(snapshot.boxCount(), explicitIndexes, roles);
     }
 
     private static Set<Integer> immutableIndexes(Set<Integer> values, int count, String label) {

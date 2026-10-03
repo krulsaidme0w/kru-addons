@@ -31,7 +31,7 @@ public final class BuilderMcpServer {
             McpJsonDefaults.getMapper(), System.in, System.out, 32 * 1024 * 1024);
         McpSyncServer server = McpServer.sync(transport).serverInfo("kru-builder-minecraft", VERSION)
             .requestTimeout(Duration.ofMinutes(3))
-            .instructions("Inspect the user's explicitly selected Minecraft region; discover blocks incrementally; propose strict PLACE/REPLACE/REMOVE plans, inspect against an exact snapshot, and publish preview only after explicit approval. Never place or break blocks or move the player. Pairing requires explicit in-game approval. Archived plans can be revisited and must be revalidated.")
+            .instructions("Run a loopback-local Minecraft visual studio. Read the selected region, live block/item catalog and captured Minecraft views; generate visual directions, compare composition from multiple camera angles, and iterate on references before any optional export. The local viewer is for visual exploration, not mandatory construction plans. Never place or break blocks, change inventory, issue commands, or move the player.")
             .capabilities(McpSchema.ServerCapabilities.builder().tools(true).build())
             .tools(toolSpecifications(bridge, archive, viewerUrl)).build();
         Runtime.getRuntime().addShutdownHook(new Thread(() -> { server.close(); viewer.close(); }, "builder-mcp-shutdown"));
@@ -49,11 +49,17 @@ public final class BuilderMcpServer {
     public static List<SyncToolSpecification> toolSpecifications(BridgeClient bridge, PlanArchiveStore archive, String viewerUrl) {
         Objects.requireNonNull(bridge);
         Objects.requireNonNull(archive);
+        Map<String, ArchitectureReview.Result> reviewedTokens = new HashMap<>();
         var tools = new ArrayList<SyncToolSpecification>();
         tools.add(tool("minecraft_status", "Read current Builder connection, selection, and completed snapshot counters.", emptySchema(), true,
             (exchange, request) -> {
                 BridgeClient.BridgeReply result = bridge.status();
                 return textResult("worldGeneration=" + result.worldGeneration() + " snapshotRevision=" + result.snapshotRevision() + "\n" + result.payload(), !result.ok());
+            }));
+        tools.add(tool("compile_build_ops", "Expand deterministic architectural primitives into exact PLACE operations before world validation. Supported primitives: box, floor, wall, line/trim, window.", architectureOpsSchema(), true,
+            (exchange, request) -> {
+                JsonObject input = new com.google.gson.Gson().toJsonTree(request.arguments()).getAsJsonObject();
+                return textResult("Compiled architectural operations\n" + ArchitectureOps.expand(input), false);
             }));
         tools.add(tool("read_selection", "Read a bounded page from the existing complete scan. Unknown/unloaded cells are explicit; this does not trigger a scan.", selectionSchema(), true,
             (exchange, request) -> {
@@ -76,6 +82,27 @@ public final class BuilderMcpServer {
                 BridgeClient.BridgeReply result = bridge.searchBlocks(args.get("query").toString(), namespace, integer(args, "page"));
                 return textResult("Modded block search\n" + result.payload(), !result.ok());
             }));
+        tools.add(tool("list_item_mods", "List active item-registry namespaces by page. Never returns the whole item registry.", pageSchema(), true,
+            (exchange, request) -> {
+                BridgeClient.BridgeReply result = bridge.listItemMods(integer(request.arguments(), "page"));
+                return textResult("Active item namespaces · page " + request.arguments().get("page") + "\n" + result.payload(), !result.ok());
+            }));
+        tools.add(tool("search_items", "Search exact local item IDs and localized labels. Results are limited to 20 entries; use the next page for more.", searchSchema(), true,
+            (exchange, request) -> {
+                Map<String, Object> args = request.arguments();
+                String namespace = args.get("namespace") == null ? null : args.get("namespace").toString();
+                BridgeClient.BridgeReply result = bridge.searchItems(args.get("query").toString(), namespace, integer(args, "page"));
+                return textResult("Modded item search\n" + result.payload(), !result.ok());
+            }));
+        tools.add(tool("describe_item", "Describe one exact item ID and return its actual Minecraft-rendered inventory icon when available.", describeSchema(), true,
+            (exchange, request) -> {
+                BridgeClient.ItemDescription result = bridge.describeItem(request.arguments().get("id").toString());
+                List<McpSchema.Content> content = new ArrayList<>();
+                content.add(McpSchema.TextContent.builder(result.metadata().payload()).build());
+                if (result.png() != null) content.add(McpSchema.ImageContent.builder(
+                    Base64.getEncoder().encodeToString(result.png()), "image/png").build());
+                return McpSchema.CallToolResult.builder().content(content).isError(false).build();
+            }));
         tools.add(tool("describe_block", "Describe one exact block ID, its legal block-state properties, and one actual Minecraft-rendered inventory-default preview.", describeSchema(), true,
             (exchange, request) -> {
                 BridgeClient.BlockDescription result = bridge.describeBlock(request.arguments().get("id").toString());
@@ -91,20 +118,29 @@ public final class BuilderMcpServer {
                     McpSchema.TextContent.builder("Current view · generation " + result.worldGeneration() + " · snapshot " + result.snapshotRevision()).build(),
                     McpSchema.ImageContent.builder(Base64.getEncoder().encodeToString(result.png()), "image/png").build())).isError(false).build();
             }));
-        tools.add(tool("inspect_build_plan", "Validate a strict staged PLACE/REPLACE/REMOVE plan against the exact current selection snapshot and archive this plan revision locally. Returns diagnostics and a schematic preview; does not change the world.", planInspectionSchema(), false,
+        tools.add(tool("inspect_build_plan", "Legacy export path: validate an optional exact block export. The normal workflow is visual exploration in the local studio; this tool is not required for ideation.", planInspectionSchema(), false,
             (exchange, request) -> {
                 Map<String, Object> args = request.arguments();
                 String json = new com.google.gson.Gson().toJson(args.get("plan"));
+                ArchitectureReview.Result review = ArchitectureReview.review(JsonParser.parseString(json).getAsJsonObject());
                 BridgeClient.PlanInspection inspection = bridge.inspectPlan(json,
                     longInteger(args, "worldGeneration"), longInteger(args, "snapshotRevision"));
-                String archived = archivePlan(bridge, archive, json, inspection);
-                return planInspectionResult(inspection, "Plan inspection archived locally: " + archived);
+                String validationToken = validationToken(inspection.metadata().payload());
+                if (validationToken != null) reviewedTokens.put(validationToken, review);
+                String archived = archivePlan(bridge, archive, json, inspection, review);
+                String viewerNote = viewerUrl == null ? "Local viewer unavailable" : "Local server viewer: " + viewerUrl;
+                return planInspectionResult(inspection, "Plan inspection archived locally: " + archived + "\n" + viewerNote + "\nArchitecture review:\n" + review.json());
             }));
-        tools.add(tool("publish_build_preview", "Publish the latest still-current validated plan into Builder's visual preview only. This never places or removes blocks; requires explicit user approval.", planIdentitySchema(), false,
+        tools.add(tool("publish_build_preview", "Legacy optional export path: show an exact block export in Builder's preview. This never places or removes blocks and is not required for visual ideation.", planIdentitySchema(), false,
             (exchange, request) -> {
                 Map<String, Object> args = request.arguments();
-                BridgeClient.BridgeReply result = bridge.publishPlan(args.get("validationToken").toString(),
+                String token = args.get("validationToken").toString();
+                ArchitectureReview.Result review = reviewedTokens.get(token);
+                if (review == null) throw new IllegalArgumentException("Run inspect_build_plan again; the local architecture review is missing or stale");
+                if (!review.publishable()) throw new IllegalArgumentException("Architecture review failed (score " + review.score() + "); revise the composition before publishing");
+                BridgeClient.BridgeReply result = bridge.publishPlan(token,
                     longInteger(args, "worldGeneration"), longInteger(args, "snapshotRevision"));
+                reviewedTokens.remove(token);
                 return textResult("Published to Builder preview only; Minecraft world unchanged.\n" + result.payload(), false);
             }));
         tools.add(tool("get_build_plan_status", "Check whether a plan inspection token is still valid for the current world snapshot.", identitySchema(), true,
@@ -146,17 +182,14 @@ public final class BuilderMcpServer {
                     || !archivedBounds.getAsJsonObject("max").equals(currentSelection.getAsJsonObject("max")))
                     throw new IllegalArgumentException("Archived plan belongs to different selection bounds");
                 BridgeClient.PlanInspection inspection = bridge.inspectPlan(record.planJson(), status.worldGeneration(), status.snapshotRevision());
-                String newId = archivePlan(bridge, archive, record.planJson(), inspection);
-                return planInspectionResult(inspection, "Re-inspected archived plan; new archive revision " + newId + ". It was not published.");
+                ArchitectureReview.Result review = ArchitectureReview.review(JsonParser.parseString(record.planJson()).getAsJsonObject());
+                String newId = archivePlan(bridge, archive, record.planJson(), inspection, review);
+                String viewerNote = viewerUrl == null ? "Local viewer unavailable" : "Local server viewer: " + viewerUrl;
+                return planInspectionResult(inspection, "Re-inspected archived plan; new archive revision " + newId + ". It was not published.\n" + viewerNote);
             }));
         tools.add(tool("open_plan_viewer", "Return the private loopback URL for the local archived-plan viewer. It reads saved plans and never edits Minecraft or the archive.", emptySchema(), true,
             (exchange, request) -> viewerUrl == null ? textResult("Local plan viewer could not bind to 127.0.0.1:47654; check whether another process is using that port.", true)
                 : textResult("Open the local Builder plan viewer: " + viewerUrl, false)));
-        tools.add(tool("pair_local_minecraft", "Start one-time pairing, or resume waiting for the in-game decision. Open Minecraft Builder Settings and click Allow local companion, then call again if still pending.", emptySchema(), false,
-            (exchange, request) -> {
-                BridgeClient.PairResult result = bridge.pair(Duration.ofSeconds(5));
-                return textResult(result.message(), "REJECTED".equals(result.state()) || "EXPIRED".equals(result.state()));
-            }));
         return List.copyOf(tools);
     }
 
@@ -169,8 +202,15 @@ public final class BuilderMcpServer {
         return McpSchema.CallToolResult.builder().content(content).isError(false).build();
     }
 
+    private static String validationToken(String payload) {
+        try {
+            JsonObject json = JsonParser.parseString(payload).getAsJsonObject();
+            return json.has("validationToken") ? json.get("validationToken").getAsString() : null;
+        } catch (RuntimeException ignored) { return null; }
+    }
+
     private static String archivePlan(BridgeClient bridge, PlanArchiveStore archive, String planJson,
-                                      BridgeClient.PlanInspection inspection) {
+                                      BridgeClient.PlanInspection inspection, ArchitectureReview.Result review) {
         String world = "snapshot unavailable"; String snapshotJson = null;
         try {
             BridgeClient.BridgeReply before = bridge.status();
@@ -190,9 +230,11 @@ public final class BuilderMcpServer {
         try {
             JsonObject contract = JsonParser.parseString(planJson).getAsJsonObject();
             UUID archiveId = UUID.randomUUID();
+            JsonObject report = JsonParser.parseString(inspection.metadata().payload()).getAsJsonObject();
+            report.add("architectureReview", JsonParser.parseString(review.json()));
             var record = new PlanArchiveStore.Record(archiveId, contract.get("title").getAsString(), java.time.Instant.now(), world,
                 inspection.metadata().worldGeneration(), inspection.metadata().snapshotRevision(), planJson,
-                Objects.requireNonNullElse(inspection.metadata().payload(), "{}"), snapshotJson,
+                report.toString(), snapshotJson,
                 inspection.previewPng() == null ? null : Base64.getEncoder().encodeToString(inspection.previewPng()));
             archive.save(record);
             return archiveId + (snapshotJson == null ? " (plan/report only; snapshot capture unavailable or changed)" : " (plan and bounded snapshot saved)");
@@ -233,6 +275,12 @@ public final class BuilderMcpServer {
     }
     private static Map<String, Object> identitySchema() {
         return objectSchema(Map.of("worldGeneration", integerSchema(), "snapshotRevision", integerSchema()), "worldGeneration", "snapshotRevision");
+    }
+    private static Map<String, Object> architectureOpsSchema() {
+        Map<String, Object> point = objectSchema(Map.of("x", Map.of("type", "integer"), "y", Map.of("type", "integer"), "z", Map.of("type", "integer")), "x", "y", "z");
+        Map<String, Object> op = objectSchema(Map.of("type", Map.of("type", "string", "enum", List.of("box", "floor", "wall", "line", "trim", "window")),
+            "from", point, "to", point, "target", Map.of("type", "string", "maxLength", 128)), "type", "from", "to", "target");
+        return objectSchema(Map.of("ops", Map.of("type", "array", "minItems", 1, "maxItems", 128, "items", op)), "ops");
     }
     private static Map<String, Object> pageSchema() {
         return objectSchema(Map.of("page", Map.of("type", "integer", "minimum", 0, "maximum", BridgeClient.MAX_CATALOG_PAGE)), "page");

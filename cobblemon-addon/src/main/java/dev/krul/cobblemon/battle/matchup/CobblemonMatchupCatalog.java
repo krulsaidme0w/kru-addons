@@ -52,6 +52,20 @@ public final class CobblemonMatchupCatalog implements CobblemonMatchupReader.Cat
             })
             .filter(name -> !name.isBlank()).distinct().sorted().limit(4).toList();
     }
+    /** Types of ordinary damaging moves available in the species/form legal learnset. */
+    public List<PokemonType> possibleAttackTypes(String species, Set<String> aspects, int level) {
+        Object learnset = get(form(species, aspects), "getMoves");
+        Object all = get(learnset, "getAllLegalMoves");
+        if (!(all instanceof Iterable<?> moves)) return List.of();
+        LinkedHashSet<PokemonType> types = new LinkedHashSet<>();
+        for (Object move : moves) {
+            if (number(get(move, "getPower"), 0) <= 0) continue;
+            MoveCategory category = MoveCategory.fromId(string(get(get(move, "getDamageCategory"), "getName")));
+            if (category != MoveCategory.PHYSICAL && category != MoveCategory.SPECIAL) continue;
+            PokemonType.fromId(string(get(get(move, "getElementalType"), "getName"))).ifPresent(types::add);
+        }
+        return List.copyOf(types);
+    }
     private static Object form(String species, Set<String> aspects) {
         Object data = species(species);
         Object form = get(data, "getForm", aspects);

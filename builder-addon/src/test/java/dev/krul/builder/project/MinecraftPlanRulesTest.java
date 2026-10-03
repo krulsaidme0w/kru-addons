@@ -77,11 +77,6 @@ class MinecraftPlanRulesTest {
         for (var block : List.of(Blocks.CHEST, Blocks.OAK_SIGN, Blocks.COMMAND_BLOCK, Blocks.SPAWNER)) {
             assertTrue(has(Map.of(new Cell(0, 0, 0), key(block.getDefaultState())), PlanValidator.Code.UNSUPPORTED_NBT));
         }
-        var bounds = new Bounds(new Cell(100, 64, -20), new Cell(100, 64, -20));
-        var session = new ProjectSession(PROJECT,
-            new WorldSnapshot(UUID.randomUUID(), 7, bounds, Map.of(bounds.min(), AIR), Set.of()), rules);
-        assertFalse(session.propose(plan(stage("chest", Set.of(), Map.of(new Cell(0, 0, 0), key(Blocks.CHEST.getDefaultState()))))).isEmpty());
-        assertTrue(session.draft().isEmpty());
     }
 
     @Test void materialsCountPlacementItemsOncePerPairDoubleSlabsTwiceAndFallbackAsBlocks() {

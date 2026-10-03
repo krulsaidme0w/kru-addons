@@ -25,7 +25,7 @@ class PlanViewerServerTest {
             assertTrue(base.startsWith("http://127.0.0.1:"));
             var client = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(1)).build();
             var home = client.send(HttpRequest.newBuilder(URI.create(base)).GET().build(), HttpResponse.BodyHandlers.ofString());
-            assertEquals(200, home.statusCode()); assertTrue(home.body().contains("Plan history"));
+            assertEquals(200, home.statusCode()); assertTrue(home.body().contains("Visual ideas"));
             var model = client.send(HttpRequest.newBuilder(URI.create(base + "model.mjs")).GET().build(), HttpResponse.BodyHandlers.ofString());
             assertEquals(200, model.statusCode()); assertTrue(model.body().contains("projectVoxel"));
             var script = client.send(HttpRequest.newBuilder(URI.create(base + "app.js")).GET().build(), HttpResponse.BodyHandlers.ofString());

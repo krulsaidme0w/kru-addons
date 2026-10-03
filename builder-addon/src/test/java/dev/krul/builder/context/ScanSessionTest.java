@@ -3,6 +3,8 @@ package dev.krul.builder.context;
 import dev.krul.builder.model.*;
 import java.util.*;
 import org.junit.jupiter.api.Test;
+import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.Method;
 import static org.junit.jupiter.api.Assertions.*;
 
 class ScanSessionTest {
@@ -17,6 +19,88 @@ class ScanSessionTest {
         return session;
     }
 
+    @Test void automaticScanStartsOnceAndStableTicksDoNotRescan() throws Exception {
+        var session = new ScanSession();
+        session.bind(world, connection, player);
+        session.setFirst(new Cell(4, 64, -3));
+        session.setSecond(new Cell(4, 64, -3));
+        assertTrue(ensureScan(session, p -> Optional.of(STONE)));
+        assertFalse(ensureScan(session, p -> { fail("An active scan must not be restarted"); return Optional.empty(); }));
+        session.tick();
+        assertEquals(1, session.snapshot().orElseThrow().known().size());
+        assertFalse(ensureScan(session, p -> { fail("A completed snapshot must not be rescanned on stable ticks"); return Optional.empty(); }));
+    }
+
+    @Test void automaticScanWaitsForReadyWorldAndCompleteBounds() throws Exception {
+        var session = new ScanSession();
+        assertFalse(ensureScan(session, p -> { fail("No world must not be scanned"); return Optional.empty(); }));
+        session.bind(world, connection, player);
+        session.setFirst(new Cell(4, 64, -3));
+        assertFalse(ensureScan(session, p -> { fail("Incomplete bounds must not be scanned"); return Optional.empty(); }));
+    }
+
+    @Test void automaticScanWaitsUntilEverySelectedChunkIsReady() throws Exception {
+        var session = new ScanSession();
+        session.bind(world, connection, player);
+        session.setFirst(new Cell(-1, 64, -1));
+        session.setSecond(new Cell(-1, 64, -1));
+        var reader = new ReadinessReader(false, true);
+
+        assertFalse(ensureScan(session, reader));
+        assertEquals(0, reader.reads);
+        assertTrue(session.status().contains("Waiting for selected chunks"));
+
+        reader.chunksReady = true;
+        assertTrue(ensureScan(session, reader));
+        session.tick();
+        assertEquals(1, session.snapshot().orElseThrow().known().size());
+    }
+
+    @Test void automaticallyRetriesAReadThatBecameUnknownDuringScan() throws Exception {
+        var session = new ScanSession();
+        session.bind(world, connection, player);
+        session.setFirst(new Cell(4, 64, -3));
+        session.setSecond(new Cell(4, 64, -3));
+        var reader = new ReadinessReader(true, false);
+
+        assertTrue(ensureScan(session, reader));
+        session.tick();
+        assertTrue(session.snapshot().isEmpty(), "An all-unknown pass is not a complete world snapshot");
+        assertTrue(session.status().contains("retry"));
+
+        reader.readable = true;
+        for (int i = 0; i < 20; i++) {
+            assertFalse(ensureScan(session, reader));
+            session.tick();
+        }
+        assertTrue(ensureScan(session, reader));
+        session.tick();
+        assertEquals(1, session.snapshot().orElseThrow().known().size());
+    }
+
+    private static final class ReadinessReader implements WorldReader {
+        private boolean chunksReady;
+        private boolean readable;
+        private int reads;
+
+        private ReadinessReader(boolean chunksReady, boolean readable) {
+            this.chunksReady = chunksReady;
+            this.readable = readable;
+        }
+
+        @Override public boolean isReady(Bounds bounds) { return chunksReady; }
+        @Override public Optional<StateKey> read(Cell cell) {
+            reads++;
+            return readable ? Optional.of(STONE) : Optional.empty();
+        }
+    }
+
+    private static boolean ensureScan(ScanSession session, WorldReader reader) throws Exception {
+        Method method = assertDoesNotThrow(() -> ScanSession.class.getMethod("ensureScan", WorldReader.class));
+        try { return (boolean) method.invoke(session, reader); }
+        catch (InvocationTargetException failure) { throw new AssertionError(failure.getCause()); }
+    }
+
     @Test void keepsLastCompleteSnapshotUntilReplacementPassCompletes() {
         var session = selected();
         session.requestScan(p -> Optional.of(STONE));
@@ -24,17 +108,26 @@ class ScanSessionTest {
         assertTrue(session.snapshot().isEmpty());
         session.tick();
         var first = session.snapshot().orElseThrow();
-        session.requestScan(p -> Optional.empty());
+        boolean[] readable = {false};
+        WorldReader retryingReader = p -> readable[0] ? Optional.of(STONE) : Optional.empty();
+        session.requestScan(retryingReader);
         session.tick();
         assertSame(first, session.snapshot().orElseThrow());
         assertTrue(session.status().contains("Scanning"));
         session.tick();
+        assertTrue(session.snapshot().isEmpty(), "An incomplete replacement must not be published as a complete snapshot");
+        assertTrue(session.status().contains("retry"));
+        readable[0] = true;
+        for (int i = 0; i < 20; i++) {
+            assertFalse(session.ensureScan(retryingReader));
+            session.tick();
+        }
+        assertTrue(session.ensureScan(retryingReader));
+        session.tick(); session.tick();
         var second = session.snapshot().orElseThrow();
         assertEquals(first.session(), second.session());
         assertTrue(second.revision() > first.revision());
-        assertEquals(2049, second.unknown().size());
-        assertTrue(session.status().contains("unknown=2049"));
-        session.tick();
+        assertTrue(second.unknown().isEmpty());
         assertSame(second, session.snapshot().orElseThrow());
     }
 

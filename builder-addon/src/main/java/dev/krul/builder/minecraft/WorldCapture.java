@@ -1,9 +1,10 @@
 package dev.krul.builder.minecraft;
 
-import dev.krul.builder.visual.AttachmentPolicy;
 import java.awt.image.BufferedImage;
 import java.nio.ByteBuffer;
+import java.nio.file.Files;
 import java.nio.file.Path;
+import java.io.IOException;
 import java.util.Objects;
 import java.util.concurrent.*;
 import meteordevelopment.meteorclient.events.render.RenderAfterWorldEvent;
@@ -15,12 +16,12 @@ import org.lwjgl.opengl.GL11;
 /** Captures only the world framebuffer before HUD rendering; PNG conversion runs off-thread. */
 public final class WorldCapture {
     private final MinecraftClient client;
-    private final AttachmentPolicy policy;
+    private final Path directory;
     private final Executor encoder;
 
-    public WorldCapture(MinecraftClient client, AttachmentPolicy policy, Executor encoder) {
+    public WorldCapture(MinecraftClient client, Path directory, Executor encoder) {
         this.client = Objects.requireNonNull(client);
-        this.policy = Objects.requireNonNull(policy);
+        this.directory = Objects.requireNonNull(directory);
         this.encoder = Objects.requireNonNull(encoder);
     }
 
@@ -54,6 +55,7 @@ public final class WorldCapture {
     }
 
     private void encode(CompletableFuture<Path> request, int width, int height, ByteBuffer data) {
+        Path capture = null;
         try {
             BufferedImage image = new BufferedImage(width, height, BufferedImage.TYPE_INT_RGB);
             int p = 0;
@@ -61,13 +63,19 @@ public final class WorldCapture {
                 int red = data.get(p++) & 255, green = data.get(p++) & 255, blue = data.get(p++) & 255; p++;
                 image.setRGB(x, y, (red << 16) | (green << 8) | blue);
             }
-            CaptureLifecycle.completeOwned(request, policy.storeCapture(image), policy::releaseCapture);
-        } catch (Throwable failure) { request.completeExceptionally(failure); }
+            Files.createDirectories(directory);
+            capture = Files.createTempFile(directory, "mcp-view-", ".png");
+            if (!javax.imageio.ImageIO.write(image, "PNG", capture.toFile())) throw new IOException("PNG encoder unavailable");
+            CaptureLifecycle.completeOwned(request, capture, this::release);
+        } catch (Throwable failure) { release(capture); request.completeExceptionally(failure); }
         finally { finish(request); }
     }
 
     private void finish(CompletableFuture<Path> request) { CaptureLifecycle.finish(request); }
 
-    /** Release after attachment import or request completion. */
-    public void release(Path capture) { policy.releaseCapture(capture); }
+    /** Delete the one-shot MCP capture after its response has been encoded. */
+    public void release(Path capture) {
+        if (capture == null || !capture.normalize().startsWith(directory.normalize())) return;
+        try { Files.deleteIfExists(capture); } catch (IOException ignored) { }
+    }
 }

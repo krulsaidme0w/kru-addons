@@ -15,10 +15,29 @@ import static org.junit.jupiter.api.Assertions.*;
 class BridgeClientTest {
     private static final String PNG = Base64.getEncoder().encodeToString(new byte[]{(byte)137,80,78,71,13,10,26,10});
 
+    @Test void defaultRequestTimeoutExceedsMinecraftCaptureDeadline() {
+        assertEquals(Duration.ofSeconds(10), BridgeClient.defaultRequestTimeout());
+    }
+
+    @Test void allowsPrivateWslBridgeAddressButRejectsPublicAndDnsHosts() {
+        assertDoesNotThrow(() -> new BridgeClient(URI.create("http://172.28.144.1:47653"), Duration.ofSeconds(1)));
+        assertDoesNotThrow(() -> new BridgeClient(URI.create("http://192.168.1.4:47653"), Duration.ofSeconds(1)));
+        assertThrows(IllegalArgumentException.class, () -> new BridgeClient(URI.create("http://203.0.113.5:47653"), Duration.ofSeconds(1)));
+        assertThrows(IllegalArgumentException.class, () -> new BridgeClient(URI.create("http://example.com:47653"), Duration.ofSeconds(1)));
+    }
+
+    @Test void discoversTheWslDefaultGatewayWithoutChangingNativeLoopbackDefault() {
+        String routes = "Iface Destination Gateway Flags RefCnt Use Metric Mask MTU Window IRTT\n"
+            + "eth0 00000000 01901CAC 0003 0 0 0 00000000 0 0 0\n";
+        assertEquals("http://172.28.144.1:47653", BridgeClient.defaultBridgeUri(null,
+            "6.6.87.2-microsoft-standard-WSL2", routes).toString());
+        assertEquals("http://127.0.0.1:47653", BridgeClient.defaultBridgeUri(null, "6.8.0", routes).toString());
+    }
+
     @Test void sendsBoundedReadAndCarriesSnapshotIdentity() throws Exception {
         var server = start(0);
         server.createContext("/v1/selection", exchange -> {
-            assertEquals("Bearer secret-token", exchange.getRequestHeaders().getFirst("Authorization"));
+            assertNull(exchange.getRequestHeaders().getFirst("Authorization"));
             String body = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
             assertTrue(body.contains("expectedWorldGeneration\":7"));
             byte[] response = "{\"version\":1,\"id\":\"r1\",\"ok\":true,\"worldGeneration\":7,\"snapshotRevision\":9,\"message\":\"ok\",\"payload\":\"{}\",\"imageBase64\":null}".getBytes(StandardCharsets.UTF_8);
@@ -26,10 +45,44 @@ class BridgeClientTest {
         });
         server.start();
         try {
-            BridgeClient client = new BridgeClient(base(server), Duration.ofSeconds(1)); client.setToken("secret-token");
+            BridgeClient client = new BridgeClient(base(server), Duration.ofSeconds(1));
             var bounds = new BridgeClient.Bounds(new BridgeClient.Coordinate(0,0,0), new BridgeClient.Coordinate(1,0,0));
             var reply = client.readSelection(bounds, 0, 20, 7, 9);
             assertEquals(7, reply.worldGeneration()); assertEquals(9, reply.snapshotRevision());
+        } finally { server.stop(0); }
+    }
+
+    @Test void searchesPagedItemCatalogAndReturnsOptionalPngWithoutAuthorization() throws Exception {
+        var server = start(0);
+        server.createContext("/v1/catalog/items/mods", exchange -> {
+            String body = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
+            assertTrue(body.contains("\"method\":\"LIST_ITEM_MODS\""));
+            assertTrue(body.contains("\"page\":1"));
+            assertNull(exchange.getRequestHeaders().getFirst("Authorization"));
+            byte[] response = "{\"version\":1,\"id\":\"r1\",\"ok\":true,\"worldGeneration\":0,\"snapshotRevision\":0,\"message\":\"ok\",\"payload\":\"{\\\"namespaces\\\":[\\\"mod\\\"]}\",\"imageBase64\":null}".getBytes(StandardCharsets.UTF_8);
+            exchange.sendResponseHeaders(200, response.length); exchange.getResponseBody().write(response); exchange.close();
+        });
+        server.createContext("/v1/catalog/items/search", exchange -> {
+            String body = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
+            assertTrue(body.contains("\"method\":\"SEARCH_ITEMS\""));
+            assertTrue(body.contains("\"page\":2"));
+            byte[] response = "{\"version\":1,\"id\":\"r2\",\"ok\":true,\"worldGeneration\":0,\"snapshotRevision\":0,\"message\":\"ok\",\"payload\":\"{}\",\"imageBase64\":null}".getBytes(StandardCharsets.UTF_8);
+            exchange.sendResponseHeaders(200, response.length); exchange.getResponseBody().write(response); exchange.close();
+        });
+        server.createContext("/v1/catalog/items/describe", exchange -> {
+            String body = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
+            assertTrue(body.contains("\"itemId\":\"mod:widget\""));
+            byte[] response = ("{\"version\":1,\"id\":\"r3\",\"ok\":true,\"worldGeneration\":0,\"snapshotRevision\":0,\"message\":\"ok\",\"payload\":\"{\\\"id\\\":\\\"mod:widget\\\"}\",\"imageBase64\":\""+PNG+"\"}").getBytes(StandardCharsets.UTF_8);
+            exchange.sendResponseHeaders(200, response.length); exchange.getResponseBody().write(response); exchange.close();
+        });
+        server.start();
+        try {
+            var client = new BridgeClient(base(server), Duration.ofSeconds(1));
+            assertTrue(client.listItemMods(1).payload().contains("mod"));
+            assertTrue(client.searchItems("widget", "mod", 2).ok());
+            var description = client.describeItem("mod:widget");
+            assertNotNull(description.png());
+            assertEquals(8, description.png().length);
         } finally { server.stop(0); }
     }
 
@@ -41,7 +94,7 @@ class BridgeClientTest {
             exchange.sendResponseHeaders(200, response.length); exchange.getResponseBody().write(response); exchange.close();
         }); server.start();
         try {
-            BridgeClient client = new BridgeClient(base(server), Duration.ofSeconds(1)); client.setToken("secret-token");
+            BridgeClient client = new BridgeClient(base(server), Duration.ofSeconds(1));
             assertThrows(BridgeClient.BridgeException.class, client::status);
         } finally { server.stop(0); }
         HttpServer closed = start(0); int port = closed.getAddress().getPort(); closed.stop(0);
@@ -56,31 +109,10 @@ class BridgeClientTest {
             exchange.sendResponseHeaders(200, bytes.length); exchange.getResponseBody().write(bytes); exchange.close();
         }); server.start();
         try {
-            BridgeClient timedClient = new BridgeClient(base(server), Duration.ofMillis(80)); timedClient.setToken("secret-token");
+            BridgeClient timedClient = new BridgeClient(base(server), Duration.ofMillis(80));
             assertThrows(BridgeClient.BridgeException.class, timedClient::status);
-            BridgeClient imageClient = new BridgeClient(base(server), Duration.ofSeconds(1)); imageClient.setToken("secret-token");
+            BridgeClient imageClient = new BridgeClient(base(server), Duration.ofSeconds(1));
             assertEquals(8, imageClient.captureView(0,0).png().length);
-        } finally { server.stop(0); }
-    }
-
-    @Test void performsExplicitPairingAndKeepsBearerOutOfReturnedResult() throws Exception {
-        var server = start(0);
-        server.createContext("/v1/pair", exchange -> {
-            exchange.getRequestBody().readAllBytes();
-            byte[] body = "{\"state\":\"WAITING\",\"code\":\"315902\",\"expiresAtMillis\":9999999999999,\"token\":null}".getBytes(StandardCharsets.UTF_8);
-            exchange.sendResponseHeaders(202, body.length); exchange.getResponseBody().write(body); exchange.close();
-        });
-        server.createContext("/v1/pair/status", exchange -> {
-            byte[] body = "{\"state\":\"APPROVED\",\"code\":\"315902\",\"expiresAtMillis\":0,\"token\":\"0123456789abcdef0123456789abcdef\"}".getBytes(StandardCharsets.UTF_8);
-            exchange.sendResponseHeaders(200, body.length); exchange.getResponseBody().write(body); exchange.close();
-        });
-        server.start();
-        try {
-            BridgeClient client = new BridgeClient(base(server), Duration.ofSeconds(1));
-            var result = client.pair(Duration.ofSeconds(1));
-            assertEquals("APPROVED", result.state());
-            assertFalse(result.message().contains("0123456789abcdef"));
-            assertNull(client.pendingPairCode());
         } finally { server.stop(0); }
     }
 
@@ -103,7 +135,7 @@ class BridgeClientTest {
         });
         server.start();
         try {
-            BridgeClient client = new BridgeClient(base(server), Duration.ofSeconds(1)); client.setToken("secret-token");
+            BridgeClient client = new BridgeClient(base(server), Duration.ofSeconds(1));
             var inspected = client.inspectPlan("{\"schemaVersion\":1}", 7, 9);
             assertNotNull(inspected.previewPng());
             assertTrue(inspected.metadata().payload().contains("validationToken"));
@@ -127,7 +159,7 @@ class BridgeClientTest {
         });
         server.start();
         try {
-            var client = new BridgeClient(base(server), Duration.ofSeconds(1)); client.setToken("secret-token");
+            var client = new BridgeClient(base(server), Duration.ofSeconds(1));
             var bounds = new BridgeClient.Bounds(new BridgeClient.Coordinate(0, 64, 0), new BridgeClient.Coordinate(1, 64, 0));
             String archived = client.readSelectionSnapshot(bounds, 7, 9);
             var result = com.google.gson.JsonParser.parseString(archived).getAsJsonObject();

@@ -11,18 +11,17 @@ import java.util.stream.Collectors;
 import static org.junit.jupiter.api.Assertions.*;
 
 class BuilderMcpToolsTest {
-    @Test void exposesOnlyBoundedInspectionAndExplicitPairingTools() {
+    @Test void exposesOnlyBoundedInspectionToolsWithoutPairing() {
         var bridge = new BridgeClient(URI.create("http://127.0.0.1:47653"), Duration.ofSeconds(1));
         var tools = BuilderMcpServer.toolSpecifications(bridge);
-        assertEquals(Set.of("minecraft_status", "read_selection", "capture_view", "pair_local_minecraft",
+        assertEquals(Set.of("minecraft_status", "compile_build_ops", "read_selection", "capture_view",
                 "list_block_mods", "search_blocks", "describe_block", "inspect_build_plan",
-                "publish_build_preview", "get_build_plan_status", "list_plan_history", "reinspect_archived_plan", "open_plan_viewer"),
+                "list_item_mods", "search_items", "describe_item", "publish_build_preview", "get_build_plan_status", "list_plan_history", "reinspect_archived_plan", "open_plan_viewer"),
             tools.stream().map(tool -> tool.tool().name()).collect(Collectors.toSet()));
         assertTrue(tools.stream().noneMatch(tool -> tool.tool().name().contains("place") || tool.tool().name().contains("move") || tool.tool().name().contains("command")));
-        assertTrue(tools.stream().filter(tool -> !Set.of("pair_local_minecraft", "publish_build_preview", "inspect_build_plan", "reinspect_archived_plan").contains(tool.tool().name()))
+        assertTrue(tools.stream().filter(tool -> !Set.of("publish_build_preview", "inspect_build_plan", "reinspect_archived_plan").contains(tool.tool().name()))
             .allMatch(tool -> Boolean.TRUE.equals(tool.tool().annotations().readOnlyHint())));
-        assertFalse(Boolean.TRUE.equals(tools.stream().filter(tool -> tool.tool().name().equals("pair_local_minecraft"))
-            .findFirst().orElseThrow().tool().annotations().readOnlyHint()));
+        assertTrue(tools.stream().noneMatch(tool -> tool.tool().name().contains("pair")));
     }
 
     @Test void planToolsAreStrictAndPublishIsPreviewOnly() {
@@ -56,6 +55,18 @@ class BuilderMcpToolsTest {
         Map<?, ?> props = (Map<?, ?>) search.inputSchema().get("properties");
         assertEquals(128, ((Map<?, ?>) props.get("query")).get("maxLength"));
         assertTrue(tools.stream().filter(tool -> Set.of("list_block_mods", "search_blocks", "describe_block").contains(tool.tool().name()))
+            .allMatch(tool -> Boolean.TRUE.equals(tool.tool().annotations().readOnlyHint())));
+    }
+
+    @Test void itemCatalogSchemasAreBoundedAndReadOnly() {
+        var tools = BuilderMcpServer.toolSpecifications(new BridgeClient(URI.create("http://127.0.0.1:47653"), Duration.ofSeconds(1)));
+        var search = tools.stream().filter(tool -> tool.tool().name().equals("search_items")).findFirst().orElseThrow().tool();
+        Map<?, ?> props = (Map<?, ?>) search.inputSchema().get("properties");
+        assertEquals(128, ((Map<?, ?>) props.get("query")).get("maxLength"));
+        assertEquals(BridgeClient.MAX_CATALOG_PAGE, ((Map<?, ?>) props.get("page")).get("maximum"));
+        var describe = tools.stream().filter(tool -> tool.tool().name().equals("describe_item")).findFirst().orElseThrow().tool();
+        assertTrue(((Map<?, ?>) ((Map<?, ?>) describe.inputSchema().get("properties")).get("id")).containsKey("pattern"));
+        assertTrue(tools.stream().filter(tool -> Set.of("list_item_mods", "search_items", "describe_item").contains(tool.tool().name()))
             .allMatch(tool -> Boolean.TRUE.equals(tool.tool().annotations().readOnlyHint())));
     }
 

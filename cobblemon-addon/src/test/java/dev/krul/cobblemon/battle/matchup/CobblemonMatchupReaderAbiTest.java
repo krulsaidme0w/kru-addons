@@ -34,8 +34,8 @@ class CobblemonMatchupReaderAbiTest {
                     && f.getOpcode() == Opcodes.GETFIELD && f.owner.equals(ROOT + "battles/ShowdownPokemon")
                     && f.name.equals("types") && f.desc.equals("Ljava/util/List;")), codec + " must carry types independently of baseTypes");
             }
-            method(read(jar, "net/messages/client/battle/BattlePokemonDTO"), "getTerastallized",
-                "()L" + ROOT + "api/types/tera/TeraType;");
+            assertNull(jar.getJarEntry(ROOT + "net/messages/client/battle/BattlePokemonDTO.class"),
+                "Cobblemon 1.8.1 has no repository BattlePokemonDTO; don't treat its old tera contract as current");
             var request = read(jar, "client/battle/SingleActionRequest");
             method(request, "getMoveSet", "()L" + ROOT + "battles/ShowdownMoveset;");
             method(request, "getSide", "()L" + ROOT + "battles/ShowdownSide;");

@@ -10,9 +10,12 @@ an already-applied server layout.
 
 The first six role anchors are MAIN, SPECIAL, SHINIES, UTILITY, TRADE, BREEDING.
 Existing named role boxes move as complete contents/slot layouts to their
-previewed positions. MAIN, UTILITY, TRADE and BREEDING contents are then kept.
-Explicitly locked box numbers cannot move or be renamed, including during the
-role reorder. A conflicting lock blocks the preview rather than being ignored.
+previewed positions. MAIN and UTILITY contents remain untouched. TRADE and
+BREEDING are routing boundaries: their contents are sorted in-place within the
+same role's boxes (species, form, total IV descending, then UUID), never routed
+to another category. Explicitly locked box numbers cannot move, be renamed or
+be sorted, including during the role reorder. A conflicting lock blocks the
+preview rather than being ignored.
 
 Among unprotected Pokemon, shiny takes priority, then intrinsic SPECIAL class
 (legendary, mythical, ultra beast, paradox, restricted), then primary type.
@@ -28,9 +31,10 @@ Insufficient boxes block before changes. Existing group boxes are reused to the
 extent needed before allocating new ones; unused surplus returns to SPARE.
 Groups may span nonadjacent boxes to avoid moving unrelated groups.
 
-Within each automatic group: species, form, total IV descending, then UUID for
-stable ties. Dual-type Pokemon physically belong to their primary-type group.
-No automatic selection of breeding candidates is performed.
+Within each automatic group and within unpinned TRADE/BREEDING zones: species,
+form, total IV descending, then UUID for stable ties. Dual-type Pokemon
+physically belong to their primary-type group. No automatic selection of
+breeding or trade candidates is performed.
 
 ## Applying and navigation
 

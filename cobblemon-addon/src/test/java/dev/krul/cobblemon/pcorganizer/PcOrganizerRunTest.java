@@ -6,6 +6,28 @@ import static org.junit.jupiter.api.Assertions.*;
 import static dev.krul.cobblemon.pcorganizer.PcOrganizerPreparationTest.*;
 
 class PcOrganizerRunTest {
+    @Test void collectionSortsInsideTradeRoleBoxAndCompletesPreview() {
+        var names = List.of("MAIN", "SPECIAL", "SHINIES", "UTILITY", "TRADE", "BREEDING");
+        var before = snapshot(names, List.of(
+            pokemon(4, 0, "zubat", "flying"), pokemon(4, 1, "abra", "psychic")));
+        var preview = PcOrganizerPreparation.prepareCollection(before, Set.of());
+        var server = new Server(before);
+        var run = new PcOrganizerRun(preview, server, server);
+
+        PcOrganizerRun.Tick result = null;
+        for (int i = 0; i < 100; i++) {
+            result = run.tick(server.world, i);
+            if (result.finished()) break;
+        }
+
+        assertNotNull(result);
+        assertTrue(result.finished());
+        assertFalse(result.blocked(), result.message());
+        assertTrue(PcOrganizerPreparation.sameStorage(preview.result(), server.world));
+        assertEquals("abra", server.world.pokemon().stream().filter(p -> p.box() == 4 && p.slot() == 0)
+            .findFirst().orElseThrow().species());
+    }
+
     @Test void collectionOverflowRunsToExactPreviewAndSecondRunDoesNothing() {
         var pokemon = new ArrayList<PcOrganizerPokemon>();
         for (int i = 0; i < 67; i++) pokemon.add(PcCollectionPreparationTest.pokemon(i / 30, i % 30, i < 33, i < 65 ? "legendary" : "ordinary"));

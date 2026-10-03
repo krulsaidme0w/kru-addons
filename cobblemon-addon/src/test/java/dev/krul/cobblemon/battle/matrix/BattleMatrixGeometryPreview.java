@@ -20,7 +20,7 @@ import static dev.krul.cobblemon.battle.matrix.BattleMatrixLayout.*;
  */
 public final class BattleMatrixGeometryPreview {
     public static void main(String[] args) throws Exception {
-        BufferedImage image = new BufferedImage(980, 340, BufferedImage.TYPE_INT_RGB);
+        BufferedImage image = new BufferedImage(980, 390, BufferedImage.TYPE_INT_RGB);
         Graphics2D g = image.createGraphics();
         g.setColor(new Color(0x292929));
         g.fillRect(0, 0, image.getWidth(), image.getHeight());
@@ -31,8 +31,8 @@ public final class BattleMatrixGeometryPreview {
         panel(g, 16, 40, 6);
         panel(g, 674, 40, 2);
         g.setColor(new Color(0xBBBBBB));
-        g.drawString("Illustrative fixtures · AWT text · ? portrait placeholders · no Minecraft / Meteor rendering claim", 16, 294);
-        g.drawString("Colored rules = move type. Full move names and evidence belong to hover tooltips.", 16, 315);
+        g.drawString("Illustrative fixtures · AWT text · ? portrait placeholders · no Minecraft / Meteor rendering claim", 16, 350);
+        g.drawString("K = confirmed revealed moves · ~ = species/form learnset potential; hover for evidence.", 16, 371);
         g.dispose();
         ImageIO.write(image, "png", Path.of(args[0]).toFile());
     }
@@ -46,12 +46,16 @@ public final class BattleMatrixGeometryPreview {
         var snapshot = snapshot(count);
         var groups = BattleMatrixModel.groups(snapshot);
         var enemies = BattleMatrixModel.enemies(snapshot);
+        List<PokemonType> possibleTypes = List.of(PokemonType.FIRE, PokemonType.WATER, PokemonType.ICE);
         fill(g, new Rect(0, 0, width(count), height(count)), 0x141414);
         for (int column = 0; column < count; column++) header(g, enemies.get(column), enemyHeader(column), enemyPortrait(column));
         fill(g, new Rect(LEFT, HEADER_HEIGHT, width(count) - 2 * LEFT, 1), 0x383838);
         for (int row = 0; row < count; row++) {
             var group = groups.get(row);
-            header(g, group.fighter(), ownHeader(row), ownPortrait(row));
+            var knownCoverage = BattleMatrixModel.coverage(group.moves(), enemies);
+            var potentialCoverage = BattleMatrixModel.potentialCoverage(possibleTypes, enemies);
+            header(g, group.fighter(), ownHeader(row), ownPortrait(row), typeLabel(group.fighter())
+                + " · K " + knownCoverage.label() + " · ~ " + potentialCoverage.label());
             var labels = BattleMatrixLabels.abbreviations(group.moves().stream().map(move -> move.data().name()).toList());
             for (int column = 0; column < count; column++) {
                 Rect cell = cell(row, column);
@@ -66,6 +70,9 @@ public final class BattleMatrixGeometryPreview {
                         chip.x() + 2, chip.y() + 2, chip.width() - 4,
                         result.evidence() == BattleMatrixCell.Evidence.UNKNOWN ? 0xAAAAAA : 0xF0F0F0);
                 }
+                var potential = BattleMatrixModel.potential(possibleTypes, enemies.get(column));
+                if (potential.cell().multiplier() != null) text(g, "~" + potential.attackType().abbreviation() + " "
+                    + potential.cell().label().substring(1) + "×", cell.x() + 4, cell.bottom() - 10, cell.width() - 8, 0xAAAAAA);
             }
             fill(g, new Rect(LEFT, BODY_TOP + (row + 1) * GROUP_ROW - 1, width(count) - 2 * LEFT, 1), 0x383838);
         }
@@ -73,13 +80,18 @@ public final class BattleMatrixGeometryPreview {
     }
 
     private static void header(Graphics2D g, Fighter fighter, Rect header, Rect portrait) {
+        header(g, fighter, header, portrait, typeLabel(fighter));
+    }
+    private static void header(Graphics2D g, Fighter fighter, Rect header, Rect portrait, String detail) {
         if (fighter.active()) fill(g, new Rect(header.x() + 3, header.y(), header.width() - 6, 1), 0x913DE2);
         text(g, "?", portrait.x() + 9, portrait.y() + 8, 24, 0xAAAAAA);
         int x = portrait.right() + 4, width = header.right() - x - 4;
         text(g, fighter.name(), x, header.y() + 9, width, 0xF0F0F0);
+        text(g, detail, x, header.y() + 21, width, 0xAAAAAA);
+    }
+    private static String typeLabel(Fighter fighter) {
         var fact = fighter.facts().types();
-        String types = fact.known() ? String.join("/", fact.value().stream().map(PokemonType::label).toList()) : "Type ?";
-        text(g, types, x, header.y() + 21, width, 0xAAAAAA);
+        return fact.known() ? String.join("/", fact.value().stream().map(PokemonType::label).toList()) : "Type ?";
     }
     private static void fill(Graphics2D g, Rect rect, int rgb) {
         g.setColor(new Color(rgb));

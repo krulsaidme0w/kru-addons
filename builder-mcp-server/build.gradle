@@ -28,6 +28,11 @@ shadowJar {
     manifest { attributes('Main-Class': application.mainClass.get()) }
 }
 
+tasks.named('startScripts') { dependsOn tasks.named('shadowJar') }
+tasks.named('startShadowScripts') { dependsOn tasks.named('jar') }
+tasks.named('distTar') { dependsOn tasks.named('shadowJar') }
+tasks.named('distZip') { dependsOn tasks.named('shadowJar') }
+
 tasks.register('packageForCodexPlugin', Copy) {
     dependsOn tasks.named('shadowJar')
     from(tasks.named('shadowJar').flatMap { it.archiveFile })

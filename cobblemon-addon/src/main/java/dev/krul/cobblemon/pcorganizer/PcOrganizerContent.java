@@ -55,7 +55,7 @@ public class PcOrganizerContent implements OverlayContent {
         c.text(snapshot != null ? snapshot.pokemon().size() + " Pokemon | " + snapshot.boxCount() + " boxes" : "Waiting for PC data", 8, 8, pc ? c.accent() : c.muted());
         c.text(collection() ? "Collection: whole PC" : "Manual sort: " + scopeLabel(), 8, 26, c.text());
         c.textFit(collection() ? "SHINIES / SPECIAL: automatic routing + capacity" : "Named zones stay together; ordinary boxes are sorted", 8, 44, width() - 16, c.text());
-        c.textFit(collection() ? "MAIN / UTILITY / TRADE / BREEDING: contents kept" : "Filters: AND | species=" + blank(owner.species.get()) + " | type=" + blank(owner.type.get()), 8, 62, width() - 16, c.muted());
+        c.textFit(collection() ? "TRADE / BREEDING: sorted in-zone; never reclassified" : "Filters: AND | species=" + blank(owner.species.get()) + " | type=" + blank(owner.type.get()), 8, 62, width() - 16, c.muted());
         c.textFit(collection() ? "Other Pokemon: primary type > species > form > IV" : "Sort: " + owner.primary.get() + " > " + owner.secondary.get() + " > " + owner.tertiary.get(), 8, 80, width() - 16, c.muted());
         if (snapshot != null) c.textFit("Current: " + (snapshot.currentBox() + 1) + " " + snapshot.boxNames().get(snapshot.currentBox()), 8, 96, width() - 16, c.accent());
         button(c, "Preview", PREVIEW, snapshot != null && !running(), mx, my);
@@ -183,7 +183,8 @@ public class PcOrganizerContent implements OverlayContent {
         if (y >= 212 && y < 228) return List.of(status);
         if (y >= 120 && y < 141) return List.of("Preview creates no changes. Apply uses exactly this plan.",
             "Collection: automatic SHINIES, SPECIAL and primary-type boxes",
-            "Shiny wins over Special; MAIN/UTILITY/TRADE/BREEDING contents are kept",
+            "Shiny wins over Special; TRADE/BREEDING sort internally without cross-zone moves",
+            "MAIN/UTILITY remain untouched; explicitly locked boxes are not changed",
             "Overflow gets additional boxes after box 6; insufficient space blocks before moving",
             "Keep PC open until done; stopping can leave a partial layout");
         if (y >= 148 && y < 169 && x >= 169) return List.of("Toggle a fixed lock on the currently viewed box",

@@ -66,12 +66,25 @@ public final class PcOrganizerCoordinator {
             if (source == null || !PcOrganizerPreparation.position(source, destination.box(), destination.slot()).equals(destination))
                 throw new IllegalStateException("Pokemon changed since preview");
             if (source.box() == destination.box() && source.slot() == destination.slot()) continue;
-            if (settings.boxPolicy().isProtected(source.box()) || settings.boxPolicy().isProtected(destination.box()))
+            boolean protectedMove = settings.boxPolicy().isProtected(source.box()) || settings.boxPolicy().isProtected(destination.box());
+            if (protectedMove && !internalManualRoleSort(source.box(), destination.box()))
                 throw new IllegalStateException("Protected box differs from preview");
             moves.add(new PcOrganizerPlan.Move(source, source.box(), source.slot(), destination.box(), destination.slot()));
             touched.add(source.box()); touched.add(destination.box());
         }
         return new PcOrganizerPlan(moves, moves.size(), 0, touched);
+    }
+
+    private boolean internalManualRoleSort(int sourceBox, int destinationBox) {
+        if (settings.boxPolicy().explicitProtected().contains(sourceBox)
+            || settings.boxPolicy().explicitProtected().contains(destinationBox)) return false;
+        String sourceRole = manualRole(expected.boxNames().get(sourceBox));
+        String destinationRole = manualRole(expected.boxNames().get(destinationBox));
+        return sourceRole.equals(destinationRole) && (sourceRole.equals("TRADE") || sourceRole.equals("BREEDING"));
+    }
+
+    private static String manualRole(String name) {
+        return PcOrganizerLayoutPlanner.normalize(name).replaceFirst(" [1-9][0-9]*(?:/[1-9][0-9]*)?$", "");
     }
 
     private Tick observe(PcOrganizerSnapshot after, long tick) {

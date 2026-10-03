@@ -16,15 +16,15 @@ public final class BridgeProtocol {
     private BridgeProtocol() {}
 
     public enum Method { STATUS, READ_SELECTION, CAPTURE_VIEW, LIST_BLOCK_MODS, SEARCH_BLOCKS, DESCRIBE_BLOCK,
-        INSPECT_PLAN, PUBLISH_PLAN, PLAN_STATUS, PAIR }
+        LIST_ITEM_MODS, SEARCH_ITEMS, DESCRIBE_ITEM, INSPECT_PLAN, PUBLISH_PLAN, PLAN_STATUS }
 
     public record Request(int version, String id, Method method, Bounds bounds, int page, int pageSize,
                           long expectedWorldGeneration, long expectedSnapshotRevision, String query,
-                          String namespace, String blockId, String payload, String validationToken, String token) {
+                          String namespace, String blockId, String itemId, String payload, String validationToken) {
         public Request(int version, String id, Method method, Bounds bounds, int page, int pageSize,
-                       long expectedWorldGeneration, long expectedSnapshotRevision, String token) {
+                       long expectedWorldGeneration, long expectedSnapshotRevision) {
             this(version, id, method, bounds, page, pageSize, expectedWorldGeneration, expectedSnapshotRevision,
-                null, null, null, null, null, token);
+                null, null, null, null, null, null);
         }
     }
 
@@ -41,7 +41,7 @@ public final class BridgeProtocol {
             JsonObject object = JsonParser.parseString(json).getAsJsonObject();
             fields(object, Set.of("version", "id", "method", "bounds", "page", "pageSize",
                 "expectedWorldGeneration", "expectedSnapshotRevision", "query", "namespace", "blockId",
-                "payload", "validationToken", "token"));
+                "itemId", "payload", "validationToken"));
             Request request = GSON.fromJson(object, Request.class);
             if (request.version() != VERSION) throw new IllegalArgumentException("Unsupported bridge protocol version");
             if (request.id() == null || request.id().isBlank() || request.id().length() > 128 || request.method() == null

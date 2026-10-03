@@ -22,6 +22,7 @@ public final class BattleMatrixModel {
     public record Coverage(int covered, int revealed) {
         public String label() { return covered + "/" + revealed; }
     }
+    public record Potential(BattleMatrixCell cell, PokemonType attackType) {}
 
     public static List<MoveGroup> groups(MatchupSnapshot snapshot) {
         if (snapshot == null) return List.of();
@@ -56,6 +57,43 @@ public final class BattleMatrixModel {
         return new Coverage(covered, revealed);
     }
 
+    /** Advisory learnset ceiling; kept separate from confirmed-move coverage. */
+    public static Potential potential(List<PokemonType> possibleAttackTypes, Fighter target) {
+        if (target == null || target.fainted() || possibleAttackTypes == null || possibleAttackTypes.isEmpty())
+            return potentialUnknown("No possible ordinary attack type or target is unavailable.", null, target);
+        TypeBasis basis = potentialTargetTypes(target);
+        if (basis.types().isEmpty()) return potentialUnknown("Target species/types are unknown; no potential value inferred.", null, target);
+
+        PokemonType bestType = null;
+        double best = -1;
+        for (PokemonType type : new java.util.LinkedHashSet<>(possibleAttackTypes)) {
+            if (type == null) continue;
+            double multiplier = TypeEffectiveness.multiplier(type, basis.types().toArray(PokemonType[]::new));
+            if (multiplier > best) { best = multiplier; bestType = type; }
+        }
+        if (bestType == null) return potentialUnknown("No possible ordinary attack type is available.", null, target);
+        String label = "~" + format(best);
+        List<String> tooltip = new ArrayList<>();
+        tooltip.add("Potential " + bestType.label() + " attack -> " + target.name() + ": " + label + "x by type chart only.");
+        tooltip.add("Possible ordinary move from the species/form learnset; not confirmed in this Pokemon's moveset or usable now.");
+        tooltip.add(basis.description() + (basis.description().endsWith(".") ? "" : "."));
+        tooltip.add("Not damage, a guaranteed move, or a safe-switch recommendation; ability/item/weather effects are excluded.");
+        return new Potential(new BattleMatrixCell(label, best, BattleMatrixCell.Evidence.POTENTIAL, tooltip), bestType);
+    }
+
+    /** Counts only identified targets whose current or species-baseline typing can be evaluated. */
+    public static Coverage potentialCoverage(List<PokemonType> possibleAttackTypes, List<Fighter> enemies) {
+        if (possibleAttackTypes == null || enemies == null) return new Coverage(0, 0);
+        int revealed = 0, covered = 0;
+        for (Fighter enemy : enemies) {
+            if (enemy == null || potentialTargetTypes(enemy).types().isEmpty()) continue;
+            revealed++;
+            var candidate = potential(possibleAttackTypes, enemy).cell();
+            if (candidate.multiplier() != null && candidate.multiplier() > 1) covered++;
+        }
+        return new Coverage(covered, revealed);
+    }
+
     public static BattleMatrixCell evaluate(Move move, Fighter target) {
         if (move == null || move.data() == null) return unknown("Move details are unknown.", move, target);
         if (move.data().category() == MoveCategory.STATUS) {
@@ -85,6 +123,20 @@ public final class BattleMatrixModel {
                 "Current battle types" + source(fact.source()));
         }
         return new TypeBasis(List.of(), BattleMatrixCell.Evidence.UNKNOWN, "");
+    }
+
+    private static TypeBasis potentialTargetTypes(Fighter target) {
+        TypeBasis current = currentTypes(target);
+        if (!current.types().isEmpty()) return current;
+        if (target.portrait().speciesId().isBlank() || target.baseTypes().isEmpty())
+            return new TypeBasis(List.of(), BattleMatrixCell.Evidence.UNKNOWN, "");
+        return new TypeBasis(target.baseTypes(), BattleMatrixCell.Evidence.POTENTIAL,
+            "Species/form baseline defensive types (battle typing may differ)");
+    }
+
+    private static Potential potentialUnknown(String reason, PokemonType attackType, Fighter target) {
+        return new Potential(new BattleMatrixCell("?", null, BattleMatrixCell.Evidence.UNKNOWN,
+            List.of(reason, "Potential analysis is advisory only.")), attackType);
     }
 
     private static BattleMatrixCell unknown(String reason, Move move, Fighter target) {

@@ -44,12 +44,22 @@ public final class BlockPreviewRenderer {
     }
 
     private PreviewPng renderOnClient(String exactId) throws IOException {
-        RenderSystem.assertOnRenderThread();
         Identifier id = Identifier.tryParse(exactId);
         if (id == null || !Registries.BLOCK.containsId(id)) throw new IllegalArgumentException("Unknown exact block ID");
         Block block = Registries.BLOCK.get(id);
         ItemStack stack = new ItemStack(block.asItem());
         if (stack.isEmpty()) throw new IllegalStateException("Block has no inventory item model");
+        return renderStackOnClient(stack);
+    }
+
+    PreviewPng renderStackNow(ItemStack stack) throws IOException {
+        if (!client.isOnThread()) throw new IllegalStateException("Item preview must run on the Minecraft client thread");
+        if (stack == null || stack.isEmpty()) throw new IllegalArgumentException("Item stack is empty");
+        return renderStackOnClient(stack);
+    }
+
+    private PreviewPng renderStackOnClient(ItemStack stack) throws IOException {
+        RenderSystem.assertOnRenderThread();
         var model = client.getItemRenderer().getModels().getModel(stack);
         if (model == client.getBakedModelManager().getMissingModel()) throw new IllegalStateException("Block item model is missing");
 

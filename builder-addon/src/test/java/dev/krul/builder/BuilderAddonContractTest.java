@@ -1,11 +1,12 @@
 package dev.krul.builder;
 
 import com.google.gson.JsonParser;
-import dev.krul.builder.agent.BuilderDynamicTools;
 import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 import java.util.Set;
 import java.util.jar.JarFile;
 import org.junit.jupiter.api.Test;
@@ -17,17 +18,43 @@ import org.objectweb.asm.Opcodes;
 import static org.junit.jupiter.api.Assertions.*;
 
 class BuilderAddonContractTest {
-    @Test void localToolsAreReadOnlyAndExposeBoundedInspection() {
-        var tools = BuilderDynamicTools.definitions();
-        assertEquals(List.of("list_block_mods", "search_blocks", "describe_block", "inspect_build_plan"), tools.asList().stream()
-            .map(tool -> tool.getAsJsonObject().get("name").getAsString()).toList());
-        assertTrue(tools.asList().stream().map(tool -> tool.getAsJsonObject().get("description").getAsString())
-            .allMatch(description -> description.contains("Read-only")));
-        assertEquals(Boolean.FALSE, tools.get(1).getAsJsonObject().getAsJsonObject("inputSchema").get("additionalProperties").getAsBoolean());
-    }
-
     private JarFile archive() throws Exception {
         return new JarFile(System.getProperty("builder.archive"));
+    }
+
+    @Test
+    void packagedBuilderWindowKeepsBoundsAndStatusWithoutActionControls() throws Exception {
+        try (var jar = archive()) {
+            Set<String> screen = stringConstants(jar, "dev/krul/builder/ui/BuilderScreen.class");
+            for (String removed : List.of("Scan / Rescan", "Overlay: ", "Collapse", "Allow", "Reject", "Revoke pairing"))
+                assertFalse(screen.contains(removed), "obsolete Builder action remains visible: " + removed);
+            Set<String> module = stringConstants(jar, "dev/krul/builder/minecraft/BuilderModule.class");
+            assertTrue(module.containsAll(Set.of("X1", "Y1", "Z1", "X2", "Y2", "Z2")));
+            assertFalse(module.contains("Apply"), "bounds should auto-apply after typing");
+            assertFalse(module.contains("Clear"), "bounds should be edited directly instead of cleared by a button");
+            assertFalse(module.contains("mark-builder-first"));
+            assertFalse(module.contains("mark-builder-second"));
+            assertTrue(screen.contains("Builder"));
+        }
+    }
+
+    private static Set<String> stringConstants(JarFile jar, String className) throws Exception {
+        var entry = jar.getJarEntry(className);
+        assertNotNull(entry, className);
+        Set<String> values = new HashSet<>();
+        try (var stream = jar.getInputStream(entry)) {
+            new ClassReader(stream).accept(new ClassVisitor(Opcodes.ASM9) {
+                @Override public MethodVisitor visitMethod(int access, String name, String descriptor,
+                                                            String signature, String[] exceptions) {
+                    return new MethodVisitor(Opcodes.ASM9) {
+                        @Override public void visitLdcInsn(Object value) {
+                            if (value instanceof String text) values.add(text);
+                        }
+                    };
+                }
+            }, 0);
+        }
+        return values;
     }
 
     @Test
@@ -71,6 +98,14 @@ class BuilderAddonContractTest {
                     assertTrue(name.startsWith("dev/krul/builder/"), name);
                 }
             }
+            for (String removed : List.of("dev/krul/builder/agent/CodexProcess.class",
+                "dev/krul/builder/archive/ConversationArchiveStore.class",
+                "dev/krul/builder/ui/BuilderController.class",
+                "dev/krul/builder/visual/AttachmentPolicy.class")) {
+                assertNull(jar.getJarEntry(removed), "legacy embedded-chat class must not ship: " + removed);
+            }
+            assertNotNull(jar.getJarEntry("dev/krul/builder/project/BuildPlan.class"));
+            assertNotNull(jar.getJarEntry("dev/krul/builder/minecraft/BuilderBridgeDataSource.class"));
         }
     }
 

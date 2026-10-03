@@ -11,12 +11,11 @@ import java.nio.charset.StandardCharsets;
 import java.util.Objects;
 import java.util.concurrent.*;
 
-/** Authenticated HTTP bridge bound exclusively to IPv4 loopback. */
+/** Unauthenticated local HTTP bridge bound exclusively to IPv4 loopback. */
 public final class BuilderBridgeServer implements AutoCloseable {
     public static final int MAX_BODY_BYTES = BridgeProtocol.MAX_JSON_BYTES;
     public static final int DEFAULT_PORT = 47653;
     private static final Gson GSON = new Gson();
-    private final BridgePairing pairing;
     private final int port;
     private final ExecutorService workers = Executors.newFixedThreadPool(2, task -> {
         Thread thread = new Thread(task, "builder-bridge-http"); thread.setDaemon(true); return thread;
@@ -24,9 +23,8 @@ public final class BuilderBridgeServer implements AutoCloseable {
     private HttpServer server;
     private volatile boolean closed;
 
-    public BuilderBridgeServer(BridgePairing pairing) { this(pairing, DEFAULT_PORT); }
-    public BuilderBridgeServer(BridgePairing pairing, int port) {
-        this.pairing = Objects.requireNonNull(pairing);
+    public BuilderBridgeServer() { this(DEFAULT_PORT); }
+    public BuilderBridgeServer(int port) {
         if (port < 0 || port > 65535) throw new IllegalArgumentException("Invalid bridge port");
         this.port = port;
     }
@@ -36,54 +34,33 @@ public final class BuilderBridgeServer implements AutoCloseable {
         if (server != null) return server.getAddress();
         server = HttpServer.create(new InetSocketAddress(InetAddress.getByName("127.0.0.1"), port), 16);
         server.setExecutor(workers);
-        route("/v1/pair", exchange -> pair(exchange));
-        route("/v1/pair/status", exchange -> pairStatus(exchange));
-        route("/v1/status", exchange -> authenticated(exchange, source, BridgeProtocol.Method.STATUS));
-        route("/v1/selection", exchange -> authenticated(exchange, source, BridgeProtocol.Method.READ_SELECTION));
-        route("/v1/capture", exchange -> authenticated(exchange, source, BridgeProtocol.Method.CAPTURE_VIEW));
-        route("/v1/catalog/mods", exchange -> authenticated(exchange, source, BridgeProtocol.Method.LIST_BLOCK_MODS));
-        route("/v1/catalog/search", exchange -> authenticated(exchange, source, BridgeProtocol.Method.SEARCH_BLOCKS));
-        route("/v1/catalog/describe", exchange -> authenticated(exchange, source, BridgeProtocol.Method.DESCRIBE_BLOCK));
-        route("/v1/plans/inspect", exchange -> authenticated(exchange, source, BridgeProtocol.Method.INSPECT_PLAN));
-        route("/v1/plans/publish", exchange -> authenticated(exchange, source, BridgeProtocol.Method.PUBLISH_PLAN));
-        route("/v1/plans/status", exchange -> authenticated(exchange, source, BridgeProtocol.Method.PLAN_STATUS));
+        route("/v1/status", exchange -> localRequest(exchange, source, BridgeProtocol.Method.STATUS));
+        route("/v1/selection", exchange -> localRequest(exchange, source, BridgeProtocol.Method.READ_SELECTION));
+        route("/v1/capture", exchange -> localRequest(exchange, source, BridgeProtocol.Method.CAPTURE_VIEW));
+        route("/v1/catalog/mods", exchange -> localRequest(exchange, source, BridgeProtocol.Method.LIST_BLOCK_MODS));
+        route("/v1/catalog/search", exchange -> localRequest(exchange, source, BridgeProtocol.Method.SEARCH_BLOCKS));
+        route("/v1/catalog/describe", exchange -> localRequest(exchange, source, BridgeProtocol.Method.DESCRIBE_BLOCK));
+        route("/v1/catalog/items/mods", exchange -> localRequest(exchange, source, BridgeProtocol.Method.LIST_ITEM_MODS));
+        route("/v1/catalog/items/search", exchange -> localRequest(exchange, source, BridgeProtocol.Method.SEARCH_ITEMS));
+        route("/v1/catalog/items/describe", exchange -> localRequest(exchange, source, BridgeProtocol.Method.DESCRIBE_ITEM));
+        route("/v1/plans/inspect", exchange -> localRequest(exchange, source, BridgeProtocol.Method.INSPECT_PLAN));
+        route("/v1/plans/publish", exchange -> localRequest(exchange, source, BridgeProtocol.Method.PUBLISH_PLAN));
+        route("/v1/plans/status", exchange -> localRequest(exchange, source, BridgeProtocol.Method.PLAN_STATUS));
         server.start();
         return server.getAddress();
     }
 
-    public BridgePairing pairing() { return pairing; }
-
     private void route(String path, HttpHandler handler) {
         server.createContext(path, exchange -> {
-            if (closed || !loopback(exchange)) { send(exchange, 403, "Forbidden"); return; }
+            if (closed || !isLoopback(exchange.getRemoteAddress().getAddress())) { send(exchange, 403, "Forbidden"); return; }
             try { handler.handle(exchange); }
             catch (BodyTooLarge error) { send(exchange, 413, "Request too large"); }
             catch (Throwable error) { send(exchange, 500, "Bridge request failed"); }
         });
     }
 
-    private void pair(HttpExchange exchange) throws IOException {
+    private void localRequest(HttpExchange exchange, BridgeDataSource source, BridgeProtocol.Method method) throws IOException {
         if (!"POST".equals(exchange.getRequestMethod())) { send(exchange, 405, "Method not allowed"); return; }
-        if (readBody(exchange).length != 0) { send(exchange, 400, "Pair request must have an empty body"); return; }
-        try {
-            var challenge = pairing.begin();
-            sendJson(exchange, 202, GSON.toJson(new PairReply("WAITING", challenge.code(), challenge.expiresAtMillis(), null)));
-        } catch (IllegalStateException pending) { send(exchange, 409, "A pairing request is already pending"); }
-    }
-
-    private void pairStatus(HttpExchange exchange) throws IOException {
-        if (!"GET".equals(exchange.getRequestMethod())) { send(exchange, 405, "Method not allowed"); return; }
-        String code = query(exchange, "code");
-        if (code == null || !code.matches("[0-9]{6}")) { send(exchange, 400, "Invalid challenge"); return; }
-        String token = pairing.takeApprovedToken(code);
-        BridgePairing.State state = pairing.state();
-        String status = token != null ? "APPROVED" : state.name();
-        sendJson(exchange, 200, GSON.toJson(new PairReply(status, code, 0, token)));
-    }
-
-    private void authenticated(HttpExchange exchange, BridgeDataSource source, BridgeProtocol.Method method) throws IOException {
-        if (!"POST".equals(exchange.getRequestMethod())) { send(exchange, 405, "Method not allowed"); return; }
-        if (!pairing.authenticate(bearer(exchange))) { send(exchange, 401, "Pairing required"); return; }
         byte[] bytes = readBody(exchange);
         BridgeProtocol.Request input;
         try { input = bytes.length == 0 ? null : BridgeProtocol.decodeRequest(new String(bytes, StandardCharsets.UTF_8)); }
@@ -97,6 +74,9 @@ public final class BuilderBridgeServer implements AutoCloseable {
             case LIST_BLOCK_MODS -> source.listBlockMods(input);
             case SEARCH_BLOCKS -> source.searchBlocks(input);
             case DESCRIBE_BLOCK -> source.describeBlock(input);
+            case LIST_ITEM_MODS -> source.listItemMods(input);
+            case SEARCH_ITEMS -> source.searchItems(input);
+            case DESCRIBE_ITEM -> source.describeItem(input);
             case INSPECT_PLAN -> source.inspectPlan(input);
             case PUBLISH_PLAN -> source.publishPlan(input);
             case PLAN_STATUS -> source.planStatus(input);
@@ -124,22 +104,8 @@ public final class BuilderBridgeServer implements AutoCloseable {
         return body;
     }
 
-    private static boolean loopback(HttpExchange exchange) {
-        InetAddress address = exchange.getRemoteAddress().getAddress();
+    static boolean isLoopback(InetAddress address) {
         return address != null && address.isLoopbackAddress();
-    }
-    private static String bearer(HttpExchange exchange) {
-        String value = exchange.getRequestHeaders().getFirst("Authorization");
-        return value != null && value.startsWith("Bearer ") ? value.substring(7) : null;
-    }
-    private static String query(HttpExchange exchange, String name) {
-        String query = exchange.getRequestURI().getRawQuery();
-        if (query == null) return null;
-        for (String part : query.split("&")) {
-            String[] pair = part.split("=", 2);
-            if (pair.length == 2 && pair[0].equals(name)) return pair[1];
-        }
-        return null;
     }
     private static void sendJson(HttpExchange exchange, int status, String body) throws IOException {
         exchange.getResponseHeaders().set("Content-Type", "application/json; charset=utf-8");
@@ -155,10 +121,9 @@ public final class BuilderBridgeServer implements AutoCloseable {
     @Override public synchronized void close() {
         closed = true;
         if (server != null) { server.stop(0); server = null; }
-        pairing.revoke(); workers.shutdownNow();
+        workers.shutdownNow();
     }
 
     @FunctionalInterface private interface HttpHandler { void handle(HttpExchange exchange) throws Exception; }
-    private record PairReply(String state, String code, long expiresAtMillis, String token) {}
     private static final class BodyTooLarge extends IOException { private static final long serialVersionUID = 1L; }
 }

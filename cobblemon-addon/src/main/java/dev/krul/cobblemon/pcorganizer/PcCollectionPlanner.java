@@ -40,16 +40,32 @@ public final class PcCollectionPlanner {
                 throw new IllegalArgumentException("Pinned box conflicts with required anchor rename: " + ANCHORS.get(box));
         }
         for (int box = 0; box < projected.boxCount(); box++) {
-            if (MANUAL.contains(PcOrganizerLayoutPlanner.normalize(projected.boxNames().get(box)))) protectedBoxes.add(box);
+            if (MANUAL.contains(manualRole(projected.boxNames().get(box)))) protectedBoxes.add(box);
         }
 
         Map<String, List<PcOrganizerPokemon>> candidates = new HashMap<>();
+        Map<String, List<PcOrganizerPokemon>> manualCandidates = new HashMap<>();
         List<PcOrganizerPokemon> result = new ArrayList<>();
         for (var pokemon : projected.pokemon()) {
-            if (protectedBoxes.contains(pokemon.box())) result.add(pokemon);
+            if (protectedBoxes.contains(pokemon.box())) {
+                String role = manualRole(projected.boxNames().get(pokemon.box()));
+                if (!explicitPinned.contains(pokemon.box()) && Set.of("TRADE", "BREEDING").contains(role))
+                    manualCandidates.computeIfAbsent(role, ignored -> new ArrayList<>()).add(pokemon);
+                else result.add(pokemon);
+            }
             else candidates.computeIfAbsent(classify(pokemon), ignored -> new ArrayList<>()).add(pokemon);
         }
         candidates.values().forEach(values -> values.sort(CANDIDATE_ORDER));
+        // These boxes are routing boundaries, not frozen ordering boundaries.
+        for (String role : List.of("TRADE", "BREEDING")) {
+            List<Integer> boxes = new ArrayList<>();
+            for (int box = 0; box < projected.boxCount(); box++)
+                if (!explicitPinned.contains(box) && role.equals(manualRole(projected.boxNames().get(box)))) boxes.add(box);
+            List<PcOrganizerPokemon> values = manualCandidates.getOrDefault(role, List.of()).stream().sorted(CANDIDATE_ORDER).toList();
+            int index = 0;
+            for (int box : boxes) for (int slot = 0; slot < SLOTS && index < values.size(); slot++)
+                result.add(at(values.get(index++), box, slot));
+        }
 
         // Fixed anchors always exist. Pinned named collection boxes appear in their
         // group, but none of their slots count toward capacity for movable candidates.
@@ -156,6 +172,10 @@ public final class PcCollectionPlanner {
         String key = PcOrganizerLayoutPlanner.normalize(name).replaceFirst(" [1-9][0-9]*(?:/[1-9][0-9]*)?$", "");
         return key.equals("SPECIAL") || key.equals("SHINIES") || key.equals("UNCLASSIFIED")
             || PokemonTypeOrder.rank(key) != Integer.MAX_VALUE ? key : null;
+    }
+
+    private static String manualRole(String name) {
+        return PcOrganizerLayoutPlanner.normalize(name).replaceFirst(" [1-9][0-9]*(?:/[1-9][0-9]*)?$", "");
     }
 
     private static PcOrganizerPokemon at(PcOrganizerPokemon p, int box, int slot) {

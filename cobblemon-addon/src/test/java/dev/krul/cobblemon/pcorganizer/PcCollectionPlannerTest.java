@@ -52,13 +52,44 @@ class PcCollectionPlannerTest {
             p(6, 7, 9, "fire", "ordinary", false, false));
         var plan = PcCollectionPlanner.plan(snapshot(names, values), Set.of(6));
         assertEquals(Set.of(0, 3, 4, 5, 6), plan.protectedBoxes());
-        for (var original : values.subList(0, 5)) assertTrue(plan.result().pokemon().contains(original));
+        for (var original : values.subList(0, 5)) assertTrue(plan.result().pokemon().stream().anyMatch(p -> p.uuid().equals(original.uuid())));
+        assertEquals(4, byId(plan, 3).box());
+        assertEquals(0, byId(plan, 3).slot());
+        assertEquals(5, byId(plan, 4).box());
+        assertEquals(0, byId(plan, 4).slot());
         assertEquals("My collection", plan.result().boxNames().get(6));
         assertEquals(1, group(plan, "MAIN").count());
         assertEquals(0, group(plan, "SPECIAL").count());
         assertEquals(0, group(plan, "SHINIES").count());
         assertEquals(6, plan.groups().stream().mapToInt(PcCollectionPlanner.Group::count).sum());
         assertEquals(7, byId(plan, 6).box());
+    }
+
+    @Test void sortsTradeAndBreedingContentsInPlaceWithoutMovingPokemonAcrossZones() {
+        var input = snapshot(anchored(6), List.of(
+            named(1, 4, 0, "zubat"), named(2, 4, 1, "abra"),
+            named(3, 5, 0, "weedle"), named(4, 5, 1, "caterpie")));
+
+        var plan = PcCollectionPlanner.plan(input, Set.of());
+
+        assertEquals("abra", at(plan, 4, 0).species());
+        assertEquals("zubat", at(plan, 4, 1).species());
+        assertEquals("caterpie", at(plan, 5, 0).species());
+        assertEquals("weedle", at(plan, 5, 1).species());
+        assertTrue(plan.result().pokemon().stream().allMatch(p -> p.box() == 4 || p.box() == 5));
+    }
+
+    @Test void explicitlyPinnedTradeZoneKeepsItsExactSlots() {
+        var input = snapshot(anchored(6), List.of(
+            named(1, 4, 0, "zubat"), named(2, 4, 1, "abra")));
+
+        var plan = PcCollectionPlanner.plan(input, Set.of(4));
+
+        assertEquals(input.pokemon(), plan.result().pokemon());
+    }
+
+    private static PcOrganizerPokemon at(PcCollectionPlanner.Plan plan, int box, int slot) {
+        return plan.result().pokemon().stream().filter(p -> p.box() == box && p.slot() == slot).findFirst().orElseThrow();
     }
 
     @Test void defaultAnchorOccupantsAreCandidatesRatherThanFrozenByIndex() {
@@ -206,6 +237,10 @@ class PcCollectionPlannerTest {
     }
     private static PcOrganizerPokemon p(int id, int box, int slot, String type, String rarity, boolean shiny, boolean radiant) {
         return new PcOrganizerPokemon(new UUID(0, id), box, slot, "species", type, "", shiny, radiant, rarity, "ability", "item", 50, 100, 0);
+    }
+    private static PcOrganizerPokemon named(int id, int box, int slot, String species) {
+        return new PcOrganizerPokemon(new UUID(0, id), box, slot, species, "fire", "", false, false,
+            "ordinary", "", "", 1, 100, 0);
     }
     private static PcOrganizerSnapshot snapshot(List<String> names, List<PcOrganizerPokemon> pokemon) {
         return new PcOrganizerSnapshot(STORE, names.size(), names, pokemon, 4);

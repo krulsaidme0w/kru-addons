@@ -56,15 +56,20 @@ class BattleMatrixLayoutTest {
             new BattleMatrixModel.MoveGroup(null, Collections.nCopies(4, move))).toList();
         assertEquals(6, BattleMatrixLayout.rows(groups).size());
         assertEquals(4, BattleMatrixLayout.rows(groups).getLast().moves().size());
+        var last = BattleMatrixLayout.chip(5, 5, 3);
         assertEquals(new BattleMatrixLayout.Hit(5, 5, 3),
-            BattleMatrixLayout.hit(groups, 6, 725, 252));
-        assertEquals(new BattleMatrixLayout.Hit(0, 0, 0), BattleMatrixLayout.hit(groups, 6, 125, 43));
-        assertEquals(new BattleMatrixLayout.Hit(0, 0, 1), BattleMatrixLayout.hit(groups, 6, 178, 43));
-        assertEquals(new BattleMatrixLayout.Hit(0, 0, 2), BattleMatrixLayout.hit(groups, 6, 125, 60));
-        assertNull(BattleMatrixLayout.hit(groups, 6, 174, 43)); // exclusive chip edge
-        assertNull(BattleMatrixLayout.hit(groups, 6, 716, 252));
+            BattleMatrixLayout.hit(groups, 6, last.x() + 2, last.y() + 2));
+        var first = BattleMatrixLayout.chip(0, 0, 0);
+        assertEquals(new BattleMatrixLayout.Hit(0, 0, 0), BattleMatrixLayout.hit(groups, 6, first.x() + 2, first.y() + 2));
+        var second = BattleMatrixLayout.chip(0, 0, 1);
+        assertEquals(new BattleMatrixLayout.Hit(0, 0, 1), BattleMatrixLayout.hit(groups, 6, second.x() + 2, second.y() + 2));
+        var third = BattleMatrixLayout.chip(0, 0, 2);
+        assertEquals(new BattleMatrixLayout.Hit(0, 0, 2), BattleMatrixLayout.hit(groups, 6, third.x() + 2, third.y() + 2));
+        assertNull(BattleMatrixLayout.hit(groups, 6, second.right(), second.y() + 2)); // exclusive chip edge
+        assertNull(BattleMatrixLayout.hit(groups, 6, BattleMatrixLayout.cell(5, 5).right() - 1,
+            BattleMatrixLayout.cell(5, 5).bottom() - 1));
         assertNull(BattleMatrixLayout.hit(groups, 6, 725, 20));
-        assertNull(BattleMatrixLayout.hit(groups, 2, 725, 252));
+        assertNull(BattleMatrixLayout.hit(groups, 2, last.x() + 2, last.y() + 2));
         assertNull(BattleMatrixLayout.hit(List.of(new BattleMatrixModel.MoveGroup(null, List.of(move))), 1, 185, 44));
         assertNull(BattleMatrixLayout.hit(groups, 6, Double.NaN, 252));
     }

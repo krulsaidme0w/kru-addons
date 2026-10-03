@@ -3,7 +3,8 @@
     "builder-minecraft": {
       "command": "java",
       "args": ["-jar", "./server/builder-mcp-server.jar"],
-      "cwd": "."
+      "cwd": ".",
+      "env": { "BUILDER_BRIDGE_URL": "http://127.0.0.1:47653" }
     }
   }
 }

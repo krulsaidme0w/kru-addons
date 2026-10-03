@@ -147,6 +147,9 @@ public final class CobblemonMatchupReader {
             for (String token : details.split(",")) if (token.strip().matches("L[0-9]+")) level = Integer.parseInt(token.strip().substring(1));
             String name = catalog.text(get(profile, "getDisplayName"));
             if (name.isBlank()) name = details.isBlank() ? catalog.text(get(shown, "getDisplayName")) : details.split(",")[0];
+            Object profileSpecies = get(profile, "getSpecies");
+            if (name.isBlank()) name = catalog.text(get(profileSpecies, "getTranslatedName"));
+            if (name.isBlank()) name = catalog.text(get(profileSpecies, "getName"));
             if (name.isBlank()) name = "Own Pokemon";
             List<String> notes = new ArrayList<>();
             if (current.isEmpty()) notes.add("Current defensive types unknown; profile base types do not prove Tera/transform state.");

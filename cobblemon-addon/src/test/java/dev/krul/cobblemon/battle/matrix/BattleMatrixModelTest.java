@@ -121,6 +121,29 @@ class BattleMatrixModelTest {
         assertEquals(new BattleMatrixModel.Coverage(1, 2), BattleMatrixModel.coverage(moves, foes));
     }
 
+    @Test void potentialLearnsetCoverageIsSeparateAndUsesBaseTypingOnlyAsAnAdvisory() {
+        var target = baseOnly("Scizor", BUG, STEEL);
+        var potential = BattleMatrixModel.potential(List.of(FIRE, WATER), target);
+
+        assertEquals("~4", potential.cell().label());
+        assertEquals(BattleMatrixCell.Evidence.POTENTIAL, potential.cell().evidence());
+        assertEquals(FIRE, potential.attackType());
+        assertTrue(potential.cell().tooltip().stream().anyMatch(line -> line.contains("not confirmed") && line.contains("learnset")));
+        assertEquals(new BattleMatrixModel.Coverage(0, 0), BattleMatrixModel.coverage(List.of(), List.of(target)));
+        assertEquals(new BattleMatrixModel.Coverage(1, 1), BattleMatrixModel.potentialCoverage(List.of(FIRE), List.of(target)));
+    }
+
+    @Test void potentialKeepsUnknownSpeciesUnknownAndNeverOverridesCurrentTypingEvidence() {
+        var hidden = fighter("Unknown", List.of(), List.of(), false, Facts.UNKNOWN);
+        assertEquals("?", BattleMatrixModel.potential(List.of(FIRE), hidden).cell().label());
+
+        var changed = fighter("Scizor", List.of(FIRE), List.of(BUG, STEEL), false, types(Freshness.CURRENT, FIRE));
+        var potential = BattleMatrixModel.potential(List.of(FIRE), changed);
+        assertEquals("~½", potential.cell().label());
+        assertEquals(BattleMatrixCell.Evidence.POTENTIAL, potential.cell().evidence());
+        assertEquals(.5, BattleMatrixModel.evaluate(move("Flamethrower", FIRE), changed).multiplier());
+    }
+
     private static BattleMatrixCell evaluate(Move move, Fighter target) {
         return BattleMatrixModel.evaluate(move, target);
     }

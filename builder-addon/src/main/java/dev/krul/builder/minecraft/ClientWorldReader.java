@@ -25,6 +25,20 @@ public final class ClientWorldReader implements WorldReader {
     }
 
     @Override
+    public boolean isReady(dev.krul.builder.model.Bounds bounds) {
+        if (!client.isOnThread() || client.world != world
+            || world.isOutOfHeightLimit(bounds.min().y()) || world.isOutOfHeightLimit(bounds.max().y())) return false;
+        int minChunkX = bounds.min().x() >> 4, maxChunkX = bounds.max().x() >> 4;
+        int minChunkZ = bounds.min().z() >> 4, maxChunkZ = bounds.max().z() >> 4;
+        for (int chunkX = minChunkX; chunkX <= maxChunkX; chunkX++) {
+            for (int chunkZ = minChunkZ; chunkZ <= maxChunkZ; chunkZ++) {
+                if (world.getChunkManager().getChunk(chunkX, chunkZ, ChunkStatus.FULL, false) == null) return false;
+            }
+        }
+        return true;
+    }
+
+    @Override
     public Optional<StateKey> read(Cell cell) {
         if (!client.isOnThread()) throw new IllegalStateException("World reads require the client thread");
         if (client.world != world || world.isOutOfHeightLimit(cell.y())) return Optional.empty();

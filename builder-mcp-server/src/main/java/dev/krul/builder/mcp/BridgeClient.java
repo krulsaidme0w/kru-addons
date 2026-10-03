@@ -6,15 +6,18 @@ import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 
 import java.net.URI;
+import java.net.InetAddress;
 import java.net.http.*;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.time.Duration;
 import java.util.Base64;
 import java.util.Objects;
-import java.util.concurrent.TimeUnit;
 
-/** Typed, bounded HTTP client for the paired in-game bridge. Tokens stay process-local. */
+/** Typed, bounded HTTP client for the loopback-only in-game bridge. */
 public final class BridgeClient {
+    private static final Duration DEFAULT_REQUEST_TIMEOUT = Duration.ofSeconds(10);
     public static final int PROTOCOL_VERSION = 1;
     public static final int MAX_PAGE_SIZE = 1024;
     public static final int MAX_CATALOG_PAGE = 10_000;
@@ -24,8 +27,6 @@ public final class BridgeClient {
     private final URI baseUri;
     private final HttpClient http;
     private final Duration timeout;
-    private volatile String token;
-    private volatile String pendingPairCode;
 
     public record Coordinate(int x, int y, int z) {}
     public record Bounds(Coordinate min, Coordinate max) {
@@ -35,10 +36,9 @@ public final class BridgeClient {
     public record CaptureReply(long worldGeneration, long snapshotRevision, byte[] png) {}
     public record BlockDescription(BridgeReply metadata, byte[] png) {}
     public record PlanInspection(BridgeReply metadata, byte[] previewPng) {}
-    public record PairResult(String state, String message) {}
+    public record ItemDescription(BridgeReply metadata, byte[] png) {}
     private record WireResponse(int version, String id, boolean ok, long worldGeneration, long snapshotRevision,
                                 String message, String payload, String imageBase64) {}
-    private record PairWire(String state, String code, long expiresAtMillis, String token) {}
 
     public BridgeClient(URI baseUri, Duration timeout) {
         this.baseUri = validateBase(Objects.requireNonNull(baseUri)); this.timeout = Objects.requireNonNull(timeout);
@@ -47,13 +47,36 @@ public final class BridgeClient {
     }
 
     public static BridgeClient localDefault() {
-        String configured = System.getenv().getOrDefault("BUILDER_BRIDGE_URL", "http://127.0.0.1:47653");
-        return new BridgeClient(URI.create(configured), Duration.ofSeconds(4));
+        String kernel = readSystemFile("/proc/sys/kernel/osrelease");
+        String routes = readSystemFile("/proc/net/route");
+        return new BridgeClient(defaultBridgeUri(System.getenv("BUILDER_BRIDGE_URL"), kernel, routes), defaultRequestTimeout());
     }
 
-    public void setToken(String token) {
-        if (token == null || token.isBlank() || token.length() > 256) throw new IllegalArgumentException("Invalid bridge token");
-        this.token = token;
+    static Duration defaultRequestTimeout() { return DEFAULT_REQUEST_TIMEOUT; }
+
+    static URI defaultBridgeUri(String configured, String kernelRelease, String routeTable) {
+        if (configured != null && !configured.isBlank()) return URI.create(configured);
+        if (kernelRelease != null && kernelRelease.toLowerCase(java.util.Locale.ROOT).contains("microsoft")) {
+            for (String line : Objects.requireNonNullElse(routeTable, "").split("\\R")) {
+                String[] fields = line.trim().split("\\s+");
+                if (fields.length < 4 || !fields[1].equals("00000000")) continue;
+                try {
+                    long flags = Long.parseLong(fields[3], 16);
+                    long gateway = Long.parseUnsignedLong(fields[2], 16);
+                    if ((flags & 0x2) == 0) continue;
+                    byte[] address = {(byte) gateway, (byte) (gateway >>> 8),
+                        (byte) (gateway >>> 16), (byte) (gateway >>> 24)};
+                    String host = InetAddress.getByAddress(address).getHostAddress();
+                    if (isPrivateIpv4(host)) return URI.create("http://" + host + ":47653");
+                } catch (RuntimeException | java.net.UnknownHostException ignored) { }
+            }
+        }
+        return URI.create("http://127.0.0.1:47653");
+    }
+
+    private static String readSystemFile(String path) {
+        try { return Files.readString(Path.of(path), StandardCharsets.UTF_8); }
+        catch (Exception ignored) { return ""; }
     }
 
     public BridgeReply status() { return call("/v1/status", "STATUS", null, 0, 0, 0, 0); }
@@ -68,6 +91,33 @@ public final class BridgeClient {
             || page < 0 || page > MAX_CATALOG_PAGE || (namespace != null && namespace.length() > 128))
             throw new IllegalArgumentException("Invalid block catalog search");
         return call("/v1/catalog/search", "SEARCH_BLOCKS", null, page, 20, 0, 0, query, namespace, null);
+    }
+
+    public BridgeReply listItemMods(int page) {
+        if (page < 0 || page > MAX_CATALOG_PAGE) throw new IllegalArgumentException("Invalid catalog page");
+        return call("/v1/catalog/items/mods", "LIST_ITEM_MODS", null, page, 20, 0, 0, null, null, null);
+    }
+
+    public BridgeReply searchItems(String query, String namespace, int page) {
+        if (query == null || query.length() > 128 || (query.isBlank() && (namespace == null || namespace.isBlank()))
+            || page < 0 || page > MAX_CATALOG_PAGE || (namespace != null && namespace.length() > 128))
+            throw new IllegalArgumentException("Invalid item catalog search");
+        return call("/v1/catalog/items/search", "SEARCH_ITEMS", null, page, 20, 0, 0, query, namespace, null);
+    }
+
+    public ItemDescription describeItem(String id) {
+        if (id == null || id.length() > 256 || !id.matches("[a-z0-9_.-]+:[a-z0-9_./-]+"))
+            throw new IllegalArgumentException("Expected an exact namespaced item ID");
+        WireResponse response = wire(callRequest("/v1/catalog/items/describe", "DESCRIBE_ITEM", null, 0, 0, 0, 0,
+            null, null, null, null, null, id));
+        if (!response.ok()) throw new BridgeException(response.message());
+        byte[] png = null;
+        if (response.imageBase64() != null) {
+            try { png = Base64.getDecoder().decode(response.imageBase64()); validatePng(png); }
+            catch (IllegalArgumentException invalid) { throw new BridgeException("Bridge returned an invalid item preview", invalid); }
+        }
+        return new ItemDescription(new BridgeReply(true, response.worldGeneration(), response.snapshotRevision(),
+            response.message(), response.payload()), png);
     }
 
     public BlockDescription describeBlock(String id) {
@@ -158,35 +208,6 @@ public final class BridgeClient {
         return new BridgeReply(true, response.worldGeneration(), response.snapshotRevision(), response.message(), response.payload());
     }
 
-    /** Starts pairing once, then waits only on this local MCP process for the explicit in-game decision. */
-    public PairResult pair(Duration waitLimit) {
-        Objects.requireNonNull(waitLimit);
-        if (waitLimit.isNegative() || waitLimit.isZero() || waitLimit.compareTo(Duration.ofMinutes(2)) > 0)
-            throw new IllegalArgumentException("Pair wait must be between zero and two minutes");
-        String challenge = pendingPairCode;
-        if (challenge == null) {
-            PairWire started = pairWire("POST", "/v1/pair");
-            if (!"WAITING".equals(started.state()) || started.code() == null) return new PairResult(started.state(), "Could not start pairing");
-            challenge = started.code(); pendingPairCode = challenge;
-        }
-        long deadline = System.nanoTime() + waitLimit.toNanos();
-        while (System.nanoTime() < deadline) {
-            PairWire state = pairWire("GET", "/v1/pair/status?code=" + challenge);
-            if ("APPROVED".equals(state.state()) && state.token() != null) {
-                setToken(state.token()); pendingPairCode = null;
-                return new PairResult("APPROVED", "Local Minecraft bridge paired successfully.");
-            }
-            if ("REJECTED".equals(state.state()) || "EXPIRED".equals(state.state())) {
-                pendingPairCode = null; return new PairResult(state.state(), "Pairing was " + state.state().toLowerCase() + ".");
-            }
-            try { TimeUnit.MILLISECONDS.sleep(400); }
-            catch (InterruptedException interrupted) { Thread.currentThread().interrupt(); throw new BridgeException("Pairing interrupted", interrupted); }
-        }
-        return new PairResult("WAITING", "Pairing is still pending in Minecraft Builder Settings.");
-    }
-
-    public String pendingPairCode() { return pendingPairCode; }
-
     private BridgeReply call(String path, String method, Bounds bounds, int page, int pageSize, long generation, long revision) {
         return call(path, method, bounds, page, pageSize, generation, revision, null, null, null);
     }
@@ -205,20 +226,23 @@ public final class BridgeClient {
     }
     private HttpRequest callRequest(String path, String method, Bounds bounds, int page, int pageSize, long generation, long revision,
                                     String query, String namespace, String blockId, String payload, String validationToken) {
-        String auth = token;
-        if (auth == null) throw new BridgeException("Pair this MCP companion with Minecraft first");
+        return callRequest(path, method, bounds, page, pageSize, generation, revision, query, namespace, blockId, payload, validationToken, null);
+    }
+    private HttpRequest callRequest(String path, String method, Bounds bounds, int page, int pageSize, long generation, long revision,
+                                    String query, String namespace, String blockId, String payload, String validationToken, String itemId) {
         JsonObject json = new JsonObject(); json.addProperty("version", PROTOCOL_VERSION); json.addProperty("id", "mcp-" + Long.toUnsignedString(System.nanoTime()));
         json.addProperty("method", method); json.add("bounds", GSON.toJsonTree(bounds)); json.addProperty("page", page); json.addProperty("pageSize", pageSize);
-        json.addProperty("expectedWorldGeneration", generation); json.addProperty("expectedSnapshotRevision", revision); json.add("token", com.google.gson.JsonNull.INSTANCE);
+        json.addProperty("expectedWorldGeneration", generation); json.addProperty("expectedSnapshotRevision", revision);
         if (query != null) json.addProperty("query", query); if (namespace != null) json.addProperty("namespace", namespace);
         if (blockId != null) json.addProperty("blockId", blockId);
+        if (itemId != null) json.addProperty("itemId", itemId);
         if (payload != null) json.addProperty("payload", payload);
         if (validationToken != null) json.addProperty("validationToken", validationToken);
         String body = json.toString();
         if (body.getBytes(StandardCharsets.UTF_8).length > MAX_PLAN_BYTES * 2 + 4096)
             throw new BridgeException("Plan request exceeds size limit");
-        return HttpRequest.newBuilder(uri(path)).timeout(timeout).header("Authorization", "Bearer " + auth)
-            .header("Content-Type", "application/json").POST(HttpRequest.BodyPublishers.ofString(body, StandardCharsets.UTF_8)).build();
+        return HttpRequest.newBuilder(uri(path)).timeout(timeout).header("Content-Type", "application/json")
+            .POST(HttpRequest.BodyPublishers.ofString(body, StandardCharsets.UTF_8)).build();
     }
 
     private WireResponse wire(HttpRequest request) {
@@ -236,29 +260,33 @@ public final class BridgeClient {
         catch (Exception error) { throw new BridgeException("Could not reach local Minecraft Builder bridge", error); }
     }
 
-    private PairWire pairWire(String method, String path) {
-        try {
-            HttpRequest.Builder request = HttpRequest.newBuilder(uri(path)).timeout(timeout);
-            if (method.equals("POST")) request.POST(HttpRequest.BodyPublishers.noBody()); else request.GET();
-            HttpResponse<String> response = http.send(request.build(), HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
-            if (response.statusCode() < 200 || response.statusCode() >= 300) throw new BridgeException("Bridge pairing HTTP " + response.statusCode());
-            PairWire wire = GSON.fromJson(response.body(), PairWire.class);
-            if (wire == null || wire.state() == null) throw new BridgeException("Invalid pairing response");
-            return wire;
-        } catch (BridgeException error) { throw error; }
-        catch (Exception error) { throw new BridgeException("Could not reach local Minecraft Builder bridge", error); }
-    }
-
     private URI uri(String path) { return URI.create(baseUri.toString().replaceAll("/$", "") + path); }
     private static JsonObject coordinate(Coordinate value) {
         JsonObject json = new JsonObject(); json.addProperty("x", value.x()); json.addProperty("y", value.y()); json.addProperty("z", value.z()); return json;
     }
     private static URI validateBase(URI uri) {
         String host = uri.getHost();
-        if (!"http".equalsIgnoreCase(uri.getScheme()) || host == null || !(host.equals("127.0.0.1") || host.equals("localhost") || host.equals("[::1]"))
+        if (!"http".equalsIgnoreCase(uri.getScheme()) || host == null || !(host.equals("127.0.0.1")
+            || host.equals("localhost") || host.equals("[::1]") || isPrivateIpv4(host))
             || uri.getUserInfo() != null || uri.getQuery() != null || uri.getFragment() != null)
-            throw new IllegalArgumentException("Bridge URL must be an HTTP loopback address");
+            throw new IllegalArgumentException("Bridge URL must be loopback or a private IPv4 address");
         return uri;
+    }
+
+    private static boolean isPrivateIpv4(String host) {
+        if (host == null || host.indexOf(':') >= 0) return false;
+        String[] octets = host.split("\\.", -1);
+        if (octets.length != 4) return false;
+        int[] values = new int[4];
+        try {
+            for (int i = 0; i < octets.length; i++) {
+                if (octets[i].isEmpty() || (octets[i].length() > 1 && octets[i].charAt(0) == '0')) return false;
+                values[i] = Integer.parseInt(octets[i]);
+                if (values[i] < 0 || values[i] > 255) return false;
+            }
+        } catch (NumberFormatException invalid) { return false; }
+        return values[0] == 10 || (values[0] == 172 && values[1] >= 16 && values[1] <= 31)
+            || (values[0] == 192 && values[1] == 168);
     }
     private static void validatePng(byte[] png) {
         byte[] signature = {(byte)137,80,78,71,13,10,26,10};

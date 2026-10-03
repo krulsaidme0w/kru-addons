@@ -20,13 +20,16 @@ import static dev.krul.cobblemon.battle.matchup.BattleReflection.singleton;
 
 /** Battle-only Pokémon × Pokémon matrix of observed moves and confirmed type matchups. */
 public final class BattleMatrixContent implements OverlayContent {
-    private final CobblemonMatchupReader reader = new CobblemonMatchupReader(new CobblemonMatchupCatalog());
+    private final CobblemonMatchupCatalog catalog = new CobblemonMatchupCatalog();
+    private final CobblemonMatchupReader reader = new CobblemonMatchupReader(catalog);
     private final MatchupNativeIcons icons = new MatchupNativeIcons();
     private final BattleMatrixContext context = BattleMatrixContext.nativeContext();
     private final BattleMatrixState state = new BattleMatrixState();
     private Object connection;
     private Object world;
     private UUID playerId;
+    private java.util.Map<String, List<PokemonType>> possibleAttackTypes = java.util.Map.of();
+    private java.util.Map<String, String> possibleAttackSignatures = java.util.Map.of();
 
     @Override public String title() { return "Battle Matchups"; }
     @Override public int width() { return BattleMatrixLayout.width(state.enemies().size()); }
@@ -57,6 +60,7 @@ public final class BattleMatrixContent implements OverlayContent {
             MatchupSnapshot next = reader.read(battle, currentPlayer,
                 singleton("com.cobblemon.mod.common.client.battle.ClientBattleInformationRepository"));
             if (state.update(next)) icons.clear();
+            updatePossibleAttackTypes(next);
         } catch (RuntimeException | LinkageError ignored) {
             clearSnapshot();
         }
@@ -80,8 +84,9 @@ public final class BattleMatrixContent implements OverlayContent {
         for (int row = 0; row < rows.size(); row++) {
             var group = rows.get(row);
             var coverage = BattleMatrixModel.coverage(group.moves(), state.enemies());
+            var potentialCoverage = BattleMatrixModel.potentialCoverage(possibleTypes(group.fighter()), state.enemies());
             renderHeader(canvas, group.fighter(), ownHeader(row), ownPortrait(row),
-                typeText(group.fighter()) + " · Cov " + coverage.label());
+                typeText(group.fighter()) + " · K " + coverage.label() + " · ~ " + potentialCoverage.label());
             var labels = BattleMatrixLabels.abbreviations(group.moves().stream().map(move -> move.data().name()).toList());
             for (int column = 0; column < state.enemies().size(); column++) {
                 Rect bounds = cell(row, column);
@@ -100,6 +105,12 @@ public final class BattleMatrixContent implements OverlayContent {
                     String label = labels.get(slot) + " " + result.label() + (result.multiplier() == null ? "" : "×");
                     canvas.textFit(label, chip.x() + 2, chip.y() + 2, chip.width() - 4,
                         result.evidence() == BattleMatrixCell.Evidence.UNKNOWN ? canvas.muted() : canvas.text());
+                }
+                var potential = potential(row, state.enemies().get(column));
+                if (potential.cell().multiplier() != null) {
+                    String possible = "~" + (potential.attackType() == null ? "?" : potential.attackType().abbreviation())
+                        + " " + potential.cell().label().substring(1) + "×";
+                    canvas.textFit(possible, bounds.x() + 4, bounds.bottom() - 10, bounds.width() - 8, canvas.muted());
                 }
             }
             canvas.fill(LEFT, group.bottom() - 1, width() - LEFT * 2, 1, canvas.border());
@@ -138,6 +149,7 @@ public final class BattleMatrixContent implements OverlayContent {
             List<String> lines = new ArrayList<>();
             lines.add(fighterName(group.fighter()));
             lines.addAll(BattleMatrixModel.evaluate(move, state.enemies().get(hit.column())).tooltip());
+            lines.addAll(potential(hit.row(), state.enemies().get(hit.column())).cell().tooltip());
             lines.add("Move type: " + (typeBadge(move).equals("?") ? "unknown" : move.data().type().label()));
             return List.copyOf(lines);
         }
@@ -149,14 +161,23 @@ public final class BattleMatrixContent implements OverlayContent {
             if (ownHeader(row).contains(x, y)) {
                 List<String> lines = new ArrayList<>(fighterTooltip(group.fighter()));
                 var coverage = BattleMatrixModel.coverage(group.moves(), state.enemies());
-                lines.add("Known-move coverage: " + coverage.covered() + " of " + coverage.revealed()
-                    + " revealed opponents with confirmed current types.");
+                var potentialCoverage = BattleMatrixModel.potentialCoverage(possibleTypes(group.fighter()), state.enemies());
+                lines.add("Confirmed-move coverage: " + coverage.covered() + " of " + coverage.revealed()
+                    + " opponents with confirmed current types.");
+                lines.add("Potential learnset coverage: " + potentialCoverage.covered() + " of " + potentialCoverage.revealed()
+                    + " opponents with current or species-baseline types; advisory only.");
                 lines.add("Type chart only; not a damage or safe-switch prediction.");
                 return List.copyOf(lines);
             }
             if (group.moves().isEmpty()) for (int column = 0; column < state.enemies().size(); column++) {
-                if (cell(row, column).contains(x, y)) return List.of(fighterName(group.fighter()), "Moves unknown.");
+                if (cell(row, column).contains(x, y)) {
+                    List<String> lines = new ArrayList<>(List.of(fighterName(group.fighter()), "Known moves unknown."));
+                    lines.addAll(potential(row, state.enemies().get(column)).cell().tooltip());
+                    return List.copyOf(lines);
+                }
             }
+            for (int column = 0; column < state.enemies().size(); column++) if (cell(row, column).contains(x, y))
+                return potential(row, state.enemies().get(column)).cell().tooltip();
         }
         return List.of();
     }
@@ -171,6 +192,39 @@ public final class BattleMatrixContent implements OverlayContent {
     private void clearSnapshot() {
         if (state.snapshot() != null) icons.clear();
         state.reset();
+        possibleAttackTypes = java.util.Map.of();
+        possibleAttackSignatures = java.util.Map.of();
+    }
+
+    private void updatePossibleAttackTypes(MatchupSnapshot snapshot) {
+        java.util.Map<String, String> signatures = new java.util.HashMap<>();
+        for (Fighter fighter : snapshot.own()) signatures.put(fighter.id(), potentialSignature(fighter));
+        if (signatures.equals(possibleAttackSignatures)) return;
+        java.util.Map<String, List<PokemonType>> next = new java.util.HashMap<>();
+        for (Fighter fighter : snapshot.own()) {
+            if (signatures.get(fighter.id()).equals(possibleAttackSignatures.get(fighter.id()))) {
+                next.put(fighter.id(), possibleAttackTypes.getOrDefault(fighter.id(), List.of()));
+                continue;
+            }
+            String species = fighter.portrait().speciesId();
+            if (species.isBlank()) continue;
+            next.put(fighter.id(), catalog.possibleAttackTypes(species, fighter.portrait().aspects(), fighter.level()));
+        }
+        possibleAttackTypes = java.util.Map.copyOf(next);
+        possibleAttackSignatures = java.util.Map.copyOf(signatures);
+    }
+
+    private static String potentialSignature(Fighter fighter) {
+        return fighter.portrait().speciesId() + "|" + fighter.portrait().aspects().stream().sorted().toList() + "|" + fighter.level();
+    }
+
+    private List<PokemonType> possibleTypes(Fighter fighter) {
+        return possibleAttackTypes.getOrDefault(fighter.id(), List.of());
+    }
+
+    private BattleMatrixModel.Potential potential(int row, Fighter enemy) {
+        var fighter = state.groups().get(row).fighter();
+        return BattleMatrixModel.potential(possibleTypes(fighter), enemy);
     }
     private MatchupSnapshot liveSnapshot() {
         MinecraftClient client = MinecraftClient.getInstance();

@@ -47,23 +47,34 @@ the full move name and evidence. Native portraits stay in compact headers, with
 no separate tall fighter cards. Unknown roster identities remain unknown slots;
 they do not disappear from the grid merely because their moves/species are hidden.
 
-Only explicit current battle-type facts authorize a type-chart multiplier. No
-species/base-type, profile, last-observed or standalone stored-Tera fallback exists.
-`?` means insufficient information, not 1×; unavailable portraits are not replaced
-with guessed species. Status moves show a dash and unsupported dynamic/special
-move semantics remain unknown. This is type effectiveness, not damage or a best-move
-recommendation; ability/item/weather effects are not simulated.
+Each intersection keeps two independent signals. Known move chips use only an
+explicit current battle-type fact; `?` means insufficient information, not 1×.
+A separate muted `~TYPE Nx` line estimates potential coverage from ordinary
+damaging move types in the own Pokemon's species/form legal learnset. It uses
+current target typing when confirmed, otherwise the identified target's
+species/form baseline. The row summary keeps confirmed-move coverage (`K`) and
+potential learnset coverage (`~`) separate; neither is collapsed into one
+"best Pokemon" score. As additional opponents are revealed, both summaries
+update over that visible set.
+
+Potential means only that the species/form's legal learnset contains an ordinary
+damaging move of that type. It does not prove this Pokemon knows or can currently
+use it, or that the target still has its baseline typing. Unknown species remain
+`?`; unavailable portraits are not replaced with guessed species. Status moves
+show a dash and unsupported dynamic/special move semantics remain unknown. Both
+signals are type-chart references, not damage or safe-switch predictions;
+ability/item/weather effects are not simulated.
 
 The window automatically appears only in battle. Battle end clears the view; a new
 battle cannot reuse prior facts. Existing saved panel scale is retained; use Reset
 position / scale to adopt the new compact default after upgrading.
 
 Pinned-runtime limitation: the installed Cobblemon fork's live and saved opponent
-projections do not expose current defensive types. Repository Terastallization is
-last-observed, not a current type-set proof. Consequently this strict matrix shows
-`?` for opponent multipliers unless a verified current source becomes available;
-the old `~` species-reference values are intentionally gone. The UI must not imply
-that a compact matrix also created server data that the client never received.
+projections may not expose current defensive types. Repository Terastallization is
+last-observed, not a current type-set proof. In that case exact known-move cells
+remain `?` while the separate `~` line may use the revealed species/form baseline.
+The UI must not imply that this advisory estimate is a server-observed battle
+fact or that the client received hidden opponent data.
 
 ## UI Utils
 

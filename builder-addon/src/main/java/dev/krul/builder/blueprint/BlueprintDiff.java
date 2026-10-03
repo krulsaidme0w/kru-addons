@@ -10,6 +10,7 @@ public final class BlueprintDiff {
     public record Difference(Cell relative, Cell absolute, StateKey target, StateKey actual, Kind kind, String stage) {}
     public record Selection(String stage, Integer layer) {
         public static final Selection ALL = new Selection(null, null);
+        public static Selection completePlan() { return ALL; }
         public Selection {
             if (stage != null && stage.isBlank()) throw new IllegalArgumentException("Stage must not be blank");
             if (layer != null && layer < 0) throw new IllegalArgumentException("Layer must be nonnegative");

@@ -16,6 +16,15 @@ import static org.junit.jupiter.api.Assertions.*;
 class MatchupNativeIconsTest {
     private static final MatchupPanelLayout.Rect BOX = new MatchupPanelLayout.Rect(10, 20, 25, 25);
 
+    @Test void uninitializedNativeLayerListIsAnIdleModelContext() {
+        assertTrue(MatchupNativeIcons.idleLayerContext(null, null, null));
+        assertTrue(MatchupNativeIcons.idleLayerContext(null, null, List.of()));
+        assertFalse(MatchupNativeIcons.idleLayerContext(new Object(), null, null));
+        assertFalse(MatchupNativeIcons.idleLayerContext(null, new Object(), null));
+        assertFalse(MatchupNativeIcons.idleLayerContext(null, null, List.of(new Object())));
+        assertFalse(MatchupNativeIcons.idleLayerContext(null, null, new Object()));
+    }
+
     @Test void nativeFailureStillUnwindsAllStateInOrder() throws Exception {
         var order = new ArrayList<String>();
         assertEquals(false, isolated(order, true, -1));

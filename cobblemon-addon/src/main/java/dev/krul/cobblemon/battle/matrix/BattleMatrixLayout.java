@@ -8,7 +8,7 @@ import java.util.List;
 /** One fighter per row, one opponent per column. Rendering and tooltips share these bounds. */
 public final class BattleMatrixLayout {
     public static final int LEFT = 6, ROW_WIDTH = 116, MATRIX_X = LEFT + ROW_WIDTH;
-    public static final int HEADER_HEIGHT = 36, BODY_TOP = 40, GROUP_ROW = 38;
+    public static final int HEADER_HEIGHT = 36, BODY_TOP = 40, GROUP_ROW = 48;
     public static final int COLUMN_WIDTH = 108, VISIBLE_ENEMIES = 6;
     public static final int HEIGHT = BODY_TOP + 6 * GROUP_ROW + LEFT;
 

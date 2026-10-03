@@ -44,6 +44,8 @@ class CobblemonMatchupReaderTest {
     public record Tera(Element getType) {}
     public record Element(String getName) {}
     public record Profile(UUID getUuid, List<String> getTypes) {}
+    public record NamedSpecies(String getName, String getTranslatedName, String getResourceIdentifier) {}
+    public record NamedProfile(UUID getUuid, List<String> getTypes, String getDisplayName, NamedSpecies getSpecies) {}
     public record TeraProfile(UUID getUuid, List<String> getTypes, Tera getTeraType) {}
     public record MoveProfile(UUID getUuid, ProfileMoves getMoveSet) {}
     public record ProfileMoves(List<ProfileMove> getMoves) {}
@@ -124,6 +126,19 @@ class CobblemonMatchupReaderTest {
         assertEquals(Set.of("shiny", "mega-x"), BattleReflection.get(portrait, "aspects"));
         Object hidden = BattleReflection.get(result.enemies().get(1), "portrait");
         assertTrue(hidden == null || "".equals(BattleReflection.get(hidden, "speciesId")));
+    }
+
+    @Test void unnamedOwnProfileFallsBackToLocalizedSpeciesNameAndExactSpeciesId() {
+        var profile = new NamedProfile(mine, List.of("dragon", "ground"), "",
+            new NamedSpecies("garchomp", "Garchomp", "cobblemon:garchomp"));
+        var battle = new Battle(battleId,
+            new Side(List.of(new Actor(player, List.of(profile), List.of()))),
+            new Side(List.of(new Actor(enemy, List.of(), List.of()))), List.of(), false);
+
+        var fighter = reader.read(battle, player, null).own().getFirst();
+
+        assertEquals("Garchomp", fighter.name());
+        assertEquals("cobblemon:garchomp", fighter.portrait().speciesId());
     }
 
     @Test void opponentTooltipDataSeparatesSpeciesPossibilitiesFromBattleRevealedFacts() {
