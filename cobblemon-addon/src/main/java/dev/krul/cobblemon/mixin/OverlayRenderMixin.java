@@ -1,6 +1,7 @@
 package dev.krul.cobblemon.mixin;
 
 import dev.krul.cobblemon.gui.overlay.OverlayHost;
+import dev.krul.cobblemon.PokemonHoverInspector;
 import net.minecraft.client.render.GameRenderer;
 import net.minecraft.client.render.RenderTickCounter;
 import org.spongepowered.asm.mixin.Mixin;
@@ -12,5 +13,8 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 @Mixin(GameRenderer.class)
 public abstract class OverlayRenderMixin {
     @Inject(method = "render", at = @At(value = "INVOKE", target = "Lnet/minecraft/client/gui/DrawContext;draw()V", shift = At.Shift.AFTER), require = 1)
-    private void kru$overlays(RenderTickCounter counter, boolean tick, CallbackInfo info) { OverlayHost.render(); }
+    private void kru$overlays(RenderTickCounter counter, boolean tick, CallbackInfo info) {
+        OverlayHost.render();
+        PokemonHoverInspector.renderActive();
+    }
 }

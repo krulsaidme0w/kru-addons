@@ -114,6 +114,23 @@ No Save/Load/Desync placeholders, packet tools/queues, restored stale GUI or bul
 Pokémon transfers. Unsupported screens that are neither HandledScreen nor verified
 PCGUI need a specific adapter; generic Cobblemon class-name prefixes are not support.
 
+## Pokémon Hover Inspector
+
+`Cobblemon → Pokemon Hover Inspector` is an independent read-only module. While a
+verified Cobblemon PC slot or a `Global Trade System` listing is under the pointer,
+it shows the observed Pokémon details in a viewport-clamped card. Only the six
+individual IV values can set the subtle slot tint; missing, partial or out-of-range
+IV data stays untinted. GTS identity/aspects come from Cobblemon 1.8.1's
+`CobblemonItemComponents.POKEMON_ITEM`; stats and other market facts come from the
+server-provided item tooltip. It does not enumerate storage or send actions.
+
+The reader/card behavior is adapted from the GPL-3.0 `Pokemon Hover Inspector`
+implementation in cobbhelperv2 commit `95d53f4`; this addon version uses KRU's
+existing Cobblemon module registry and overlay render lifecycle. Preserve the
+repository GPL-3.0 license and this attribution when modifying or redistributing it.
+Runtime support is confirmed only for the Cobblemon 1.8.1 item-component API; a live
+GTS listing and hover card still require in-game acceptance testing.
+
 ## Required in-game acceptance (not replaced by unit/ABI tests)
 
 1. Inventory, /wondertrade, /daycare, /gts and PC: auto-show without replacing menu;

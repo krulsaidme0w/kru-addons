@@ -21,6 +21,7 @@ public final class CobblemonAddon extends MeteorAddon {
         modules.add(new BattleMatchups());
         modules.add(new CobblemonUiUtils());
         modules.add(new PcOrganizer());
+        modules.add(new PokemonHoverInspector());
         Hud.get().register(CobblemonDiscoveryHud.INFO);
         DiscoveryRarityRuntime.init();
         dev.krul.cobblemon.gui.overlay.OverlayHost.init();
